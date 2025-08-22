@@ -15,9 +15,9 @@
 #          BUGS:  ---
 #         NOTES:  ---
 #        AUTHOR:  Gemini & Your Collaboration
-#       VERSION:  1.0
+#       VERSION:  1.2
 #       CREATED:  2025-08-21
-#      REVISION:  v1.2 (Line Endings Strictly Corrected)
+#      REVISION:  v1.2 (Interaction & Line Endings Fixed)
 #
 #===================================================================
 
@@ -171,37 +171,37 @@ main_menu() {
         read -p "请输入数字 [0-6]: " choice
 
         case $choice in
-            1)
+            "1"*)
                 perform_op_1
                 perform_op_2
                 perform_op_3
                 echo -e "\n${Tip} 所有净化选项已执行完毕。建议重启面板使所有设置生效。"
                 read -p "按任意键返回主菜单..."
                 ;;
-            2)
+            "2"*)
                 perform_op_1
                 read -p "操作已执行完毕，按任意键返回主菜单..."
                 ;;
-            3)
+            "3"*)
                 perform_op_2
                 read -p "操作已执行完毕，按任意键返回主菜单..."
                 ;;
-            4)
+            "4"*)
                 perform_op_3
                 read -p "操作已执行完毕，按任意键返回主菜单..."
                 ;;
-            5)
+            "5"*)
                 restore_file "${INIT_PY_FILE}"
                 echo -e "\n${Tip} 恢复操作已执行完毕。建议重启面板以应用原始文件。"
                 read -p "按任意键返回主菜单..."
                 ;;
-            6)
+            "6"*)
                 echo -e "\n${Info} 正在重启宝塔面板，请稍候..."
                 bt restart
                 echo -e "${Info} 宝塔面板重启命令已发送。"
                 read -p "按任意键返回主菜单..."
                 ;;
-            0)
+            "0"*)
                 exit 0
                 ;;
             *)
