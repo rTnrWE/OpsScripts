@@ -17,7 +17,7 @@
 #        AUTHOR:  Gemini & Your Collaboration
 #       VERSION:  1.0
 #       CREATED:  2025-08-21
-#      REVISION:  v1.1 (Wording Optimized & Line Endings Fixed)
+#      REVISION:  v1.2 (Line Endings Strictly Corrected)
 #
 #===================================================================
 
@@ -89,7 +89,6 @@ perform_op_1() {
     echo -e "\n${Green_font_prefix}>>> 开始执行 [优化 1]: 停止写入面板请求日志 (request 日志)...${Font_color_suffix}"
     backup_file "${INIT_PY_FILE}" || return
     
-    # 检查是否已经修改过
     if grep -q "# public.write_request_log(reques)" "${INIT_PY_FILE}"; then
         echo -e "${Info} 检测到日志写入功能已被禁用，无需重复操作。"
         return
@@ -109,7 +108,6 @@ perform_op_2() {
     echo -e "\n${Green_font_prefix}>>> 开始执行 [优化 2]: 去除面板错误日志与信息上报...${Font_color_suffix}"
     backup_file "${INIT_PY_FILE}" || return
 
-    # 检查并禁用错误上报
     if grep -q "# public.run_thread(public.httpPost" "${INIT_PY_FILE}"; then
         echo -e "${Info} 检测到错误上报功能已被禁用，跳过。"
     else
@@ -121,7 +119,6 @@ perform_op_2() {
         fi
     fi
 
-    # 检查并禁用定时检查/上报
     if grep -q "# public.run_thread(public.ExecShell, ('btpython /www/server/panel/script/reload_check.py hour',))" "${INIT_PY_FILE}"; then
         echo -e "${Info} 检测到定时检查/上报功能已被禁用，跳过。"
     else
