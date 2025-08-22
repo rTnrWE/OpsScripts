@@ -17,7 +17,7 @@
 #        AUTHOR:  Gemini & Your Collaboration
 #       VERSION:  1.0
 #       CREATED:  2025-08-21
-#      REVISION:  v1.1 (Wording Optimized)
+#      REVISION:  v1.1 (Wording Optimized & Line Endings Fixed)
 #
 #===================================================================
 
