@@ -2,34 +2,34 @@
 
 #================================================================================
 #
-#          FILE: sing-box-deploy.sh
+#          FILE: Sing-Box-VRV.sh
 #
-#         USAGE: bash <(curl -fsSL URL_TO_THIS_SCRIPT)
-#                After install, use 'sbd' command (re-login may be required).
+#         USAGE: bash <(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/Sing-Box-VRV.sh)
+#                After install, use 'sbv' command (re-login may be required).
 #
-#   DESCRIPTION: A comprehensive management platform for sing-box (VLESS+Reality).
+#   DESCRIPTION: A dedicated management platform for Sing-Box using the
+#                VLESS+Reality+Vision (VRV) configuration.
+#                This script is NOT intended for other protocols.
 #
 #       OPTIONS: ---
 #  REQUIREMENTS: curl, openssl, jq
-#          BUGS: ---
-#         NOTES: ---
 #        AUTHOR: Your Name
 #  ORGANIZATION:
 #       CREATED: $(date +'%Y-%m-%d %H:%M:%S')
-#      REVISION: 1.8
+#      REVISION: 1.9
 #
 #================================================================================
 
 # --- Script Metadata and Configuration ---
-SCRIPT_VERSION="1.8"
-SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/sing-box-deploy.sh.sh"
-INSTALL_PATH="/usr/local/sbin/sing-box-deploy.sh"
-SHORTCUT_PATH="/usr/local/bin/sbd"
+SCRIPT_VERSION="1.9"
+SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/Sing-Box-VRV.sh"
+INSTALL_PATH="/usr/local/sbin/sing-box-vrv.sh"
+SHORTCUT_PATH="/usr/local/bin/sbv"
 
 # --- Colors and Global Variables ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 CONFIG_PATH="/etc/sing-box/config.json"
-INFO_PATH="/etc/sing-box/install_info.env"
+INFO_PATH="/etc/sing-box/vrv_info.env"
 SINGBOX_BINARY=""
 
 # --- Core Functions ---
@@ -68,7 +68,7 @@ internal_validate_domain() {
 }
 
 generate_config() {
-    echo -e "${BLUE}>>> 正在配置 VLESS + Reality...${NC}"
+    echo -e "${BLUE}>>> 正在配置 VLESS + Reality + Vision...${NC}"
     local handshake_server
     while true; do
         read -p "请输入 Reality 域名 [默认 www.microsoft.com]: " handshake_server
@@ -108,15 +108,14 @@ start_service() {
     if systemctl is-active --quiet sing-box; then echo -e "${GREEN}sing-box 服务已成功启动！${NC}"; else echo -e "${RED}错误：sing-box 服务启动失败。${NC}"; return 1; fi
 }
 
-# --- FIXED: Correct printf formatting ---
 show_summary() {
     if [[ ! -f "$INFO_PATH" ]]; then echo -e "${RED}错误：未找到配置信息文件。${NC}"; return; fi
     source "$INFO_PATH"
     local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
-    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#VLESS-Reality"
+    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
 
     echo -e "\n=================================================="
-    echo -e "${GREEN}      sing-box VLESS+Reality 配置信息      ${NC}"
+    echo -e "${GREEN}       Sing-Box-VRV (VLESS+Reality) 配置       ${NC}"
     echo -e "=================================================="
     printf "  %-22s: ${BLUE}%s${NC}\n" "服务器地址 (Address)" "$server_ip"
     printf "  %-22s: ${BLUE}%s${NC}\n" "端口 (Port)" "$LISTEN_PORT"
@@ -125,25 +124,26 @@ show_summary() {
     printf "  %-22s: ${BLUE}%s${NC}\n" "Short ID" "$SHORT_ID"
     printf "  %-22s: ${BLUE}%s${NC}\n" "Reality 域名 (SNI)" "$HANDSHAKE_SERVER"
     echo -e "--------------------------------------------------"
-    echo -e "${GREEN}客户端导入链接 (VLESS URL):${NC}"
+    echo -e "${GREEN}客户端导入链接:${NC}"
     echo -e "${BLUE}${vless_link}${NC}"
     echo -e "--------------------------------------------------"
 }
 
-# --- NEW/MODIFIED Management Functions ---
 
-install_platform() {
-    echo -e "${BLUE}--- 开始完整安装流程 ---${NC}"
+# --- Management Functions ---
+
+install_vrv() {
+    echo -e "${BLUE}--- 开始安装 Sing-Box-VRV ---${NC}"
     install_script
     install_singbox_core || return 1
     generate_config || return 1
     start_service || return 1
     show_summary
-    echo -e "\n${GREEN}--- 安装成功 ---${NC}"
+    echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
 }
 
-uninstall_all() {
-    read -p "$(echo -e ${RED}"警告：此操作将彻底卸载 sing-box 并移除本管理平台。确定吗? (y/N): "${NC})" confirm
+uninstall_vrv() {
+    read -p "$(echo -e ${RED}"警告：此操作将彻底卸载 Sing-Box-VRV 及管理脚本。确定吗? (y/N): "${NC})" confirm
     if [[ "${confirm,,}" != "y" ]]; then echo "操作已取消。"; return; fi
     
     echo -e "${YELLOW}正在停止并禁用 sing-box 服务...${NC}"
@@ -156,19 +156,19 @@ uninstall_all() {
     systemctl daemon-reload
     echo -e "${GREEN}sing-box 已卸载。${NC}"
 
-    echo -e "${YELLOW}正在移除管理脚本和 sbd 命令...${NC}"
+    echo -e "${YELLOW}正在移除 Sing-Box-VRV 管理脚本...${NC}"
     rm -f "$SHORTCUT_PATH" "$INSTALL_PATH"
-    echo -e "${GREEN}管理平台已移除。${NC}"
+    echo -e "${GREEN}管理脚本及 'sbv' 命令已移除。${NC}"
     echo -e "${BLUE}卸载完成！${NC}"
 }
 
 install_script() {
-    echo -e "${BLUE}>>> 正在安装管理脚本...${NC}"
+    echo -e "${BLUE}>>> 正在安装管理脚本 'sbv'...${NC}"
     cp -f "$0" "$INSTALL_PATH"
     chmod +x "$INSTALL_PATH"
     ln -sf "$INSTALL_PATH" "$SHORTCUT_PATH"
     echo -e "${GREEN}脚本已安装。${NC}"
-    echo -e "${YELLOW}请注意：您可能需要重新登录或运行 'source /etc/profile' 来使 'sbd' 命令立即生效。${NC}"
+    echo -e "${YELLOW}提示：请重新登录 SSH 或运行 'source /etc/profile' 以使 'sbv' 命令生效。${NC}"
 }
 
 update_script() {
@@ -201,36 +201,44 @@ update_singbox_core() {
     else echo -e "${GREEN}已是最新版本。${NC}"; fi
 }
 
+validate_reality_domain() {
+    # This is a standalone tool
+    clear; echo -e "${BLUE}--- Reality 域名稳定性测试 ---${NC}"; read -p "请输入你想测试的目标域名: " domain_to_test
+    if [[ -z "$domain_to_test" ]]; then echo -e "\n${RED}域名不能为空。${NC}"; return; fi
+    echo -e "\n${YELLOW}正在进行 5 次 TLSv1.3 连接测试...${NC}"; local success_count=0
+    for i in {1..5}; do echo -n "第 $i/5 次测试: "; if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 "https://$domain_to_test" 2>&1 | grep -q "SSL connection using TLSv1.3"; then echo -e "${GREEN}成功${NC}"; ((success_count++)); else echo -e "${RED}失败${NC}"; fi; sleep 1; done
+    echo "--------------------------------------------------"; if [[ ${success_count} -eq 5 ]]; then echo -e "${GREEN}结论：该域名非常适合。${NC}"; elif [[ ${success_count} -gt 0 ]]; then echo -e "${YELLOW}结论：可用但不稳定。${NC}"; else echo -e "${RED}结论：不适合。${NC}"; fi;
+}
 
 # --- Main Menu Logic ---
-# --- MODIFIED: Always show menu, install is now a deliberate user choice ---
 main_menu() {
     clear
     echo -e "======================================================"
-    echo -e "${GREEN}      sing-box 管理平台 (sbd) v${SCRIPT_VERSION}      ${NC}"
+    echo -e "${GREEN}      Sing-Box-VRV 管理脚本 v${SCRIPT_VERSION}      ${NC}"
     echo -e "======================================================"
-    # Dynamically change the first option based on whether it's installed
     if [[ ! -f "$CONFIG_PATH" ]]; then
-        echo -e " 1. ${GREEN}安装 sing-box 平台${NC}"
+        echo -e " 1. ${GREEN}安装 Sing-Box-VRV${NC}"
     else
-        echo -e " 1. ${YELLOW}重新安装 sing-box 平台${NC}"
+        echo -e " 1. ${YELLOW}重新安装 Sing-Box-VRV${NC}"
     fi
     echo -e " 2. 查看配置信息"
     echo -e " 3. ${YELLOW}验证 Reality 域名 (稳定性测试)${NC}"
     echo -e "------------------------------------------------------"
     echo -e " 8. 更新 sing-box 核心"
-    echo -e " 9. ${BLUE}检查脚本更新${NC}"
-    echo -e " 0. ${RED}彻底卸载平台${NC}"
+    echo -e " 9. ${RED}彻底卸载 Sing-Box-VRV${NC}"
+    echo -e " 0. ${BLUE}检查脚本更新${NC}"
+    echo -e " Q. 退出脚本"
     echo -e "------------------------------------------------------"
     read -p "请输入你的选项: " choice
 
-    case $choice in
-        1) install_platform ;;
+    case "${choice,,}" in
+        1) install_vrv ;;
         2) [[ -f "$CONFIG_PATH" ]] && show_summary || echo -e "${RED}尚未安装，无配置可查看。${NC}" ;;
-        3) validate_reality_domain ;; # This is a standalone tool
+        3) validate_reality_domain ;;
         8) [[ -f "$CONFIG_PATH" ]] && update_singbox_core || echo -e "${RED}尚未安装，无法更新。${NC}" ;;
-        9) [[ -f "$INSTALL_PATH" ]] && update_script || echo -e "${RED}脚本尚未安装到系统，无法更新。${NC}" ;;
-        0) uninstall_all; exit 0 ;; # Exit after uninstalling
+        9) uninstall_vrv; exit 0 ;;
+        0) [[ -f "$INSTALL_PATH" ]] && update_script || echo -e "${RED}脚本尚未安装到系统，无法更新。${NC}" ;;
+        q) exit 0 ;;
         *) echo -e "${RED}无效选项。${NC}" ;;
     esac
     read -n 1 -s -r -p "按任意键返回主菜单..."
