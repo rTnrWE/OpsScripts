@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.1
+# REVISION:     3.2
 #================================================================================
 
-SCRIPT_VERSION="3.1"
+SCRIPT_VERSION="3.2"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -219,8 +219,10 @@ manage_service() {
 }
 
 uninstall_vrv() {
-    read -p "$(echo -e ${RED}"警告：此操作将彻底卸载 Sing-Box-VRV 及管理脚本。确定吗? (y/N): "${NC})" confirm
-    if [[ "${confirm,,}" != "y" ]]; then echo "操作已取消。"; return; fi
+    read -p "$(echo -e ${RED}"警告：此操作将彻底移除整个 Sing-Box-VRV 平台。确认卸载? [Y/n]: "${NC})" confirm
+    if [[ "${confirm,,}" == "n" ]]; then
+        echo "操作已取消。"; return;
+    fi
     systemctl stop sing-box &>/dev/null; systemctl disable sing-box &>/dev/null
     local bin_path=$(command -v sing-box); rm -rf /etc/sing-box /etc/systemd/system/sing-box.service
     if [[ -n "$bin_path" ]]; then rm -f "$bin_path"; fi
