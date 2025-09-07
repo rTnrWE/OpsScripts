@@ -5,7 +5,7 @@
 #          FILE: Sing-Box-VRV.sh
 #
 #         USAGE: bash <(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/Sing-Box-VRV.sh)
-#                The 'sbv' command is available in new terminal sessions after installation.
+#                The 'sbv' command is available IMMEDIATELY after installation.
 #
 #   DESCRIPTION: A professional management platform for Sing-Box using the
 #                VLESS+Reality+Vision (VRV) configuration.
@@ -16,12 +16,12 @@
 #        AUTHOR: Your Name
 #  ORGANIZATION:
 #       CREATED: $(date +'%Y-%m-%d %H:%M:%S')
-#      REVISION: 2.4
+#      REVISION: 2.5
 #
 #================================================================================
 
 # --- Script Metadata and Configuration ---
-SCRIPT_VERSION="2.4"
+SCRIPT_VERSION="2.5"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/Sing-Box-VRV.sh"
 INSTALL_PATH="/usr/local/sbin/sing-box-vrv.sh"
 SHORTCUT_PATH="/usr/local/bin/sbv"
@@ -159,16 +159,9 @@ install_vrv() {
     echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
 
     if [[ "$first_time_install" == true ]]; then
-        echo -e "\n======================================================"
-        echo -e "${GREEN}重要提示${NC}"
-        echo -e "管理脚本已安装成功。您现在可以继续在当前菜单中操作。"
-        echo -e "为了在任何地方都能使用 '${BLUE}sbv${NC}' 命令, 您需要："
-        echo -e "1. ${YELLOW}退出当前的 SSH 会话。${NC}"
-        echo -e "2. ${YELLOW}重新登录 SSH。${NC}"
-        echo -e "之后, '${BLUE}sbv${NC}' 命令将永久可用。"
-        echo -e "======================================================"
-        echo -e "${BLUE}脚本将自动重新加载，请继续...${NC}"
-        sleep 4
+        echo -e "\n${GREEN}安装完成！管理脚本已启动，您可以继续操作。${NC}"
+        echo -e "${YELLOW}下次登录后，您可以随时使用 '${BLUE}sbv${YELLOW}' 命令来运行此平台。${NC}"
+        # Execute the script from its permanent location to continue the session seamlessly
         exec "$INSTALL_PATH"
     fi
 }
@@ -197,9 +190,8 @@ change_reality_domain() {
     show_summary
 }
 
-# --- MODIFIED: manage_service with on-demand logging ---
+# --- FIXED: 'echo -e' for all menu items ---
 manage_service() {
-    # Nested function to handle log state cleanup
     disable_logs_and_restart() {
         echo -e "\n${YELLOW}>>> 正在关闭日志并恢复服务...${NC}"
         jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
@@ -209,14 +201,14 @@ manage_service() {
     
     clear
     echo -e "${BLUE}--- sing-box 服务管理 ---${NC}"
-    echo "-------------------------"
-    echo " 1. 重启服务"
-    echo " 2. 停止服务"
-    echo " 3. 启动服务"
-    echo " 4. 查看状态"
-    echo " 5. ${YELLOW}查看实时日志 (临时开启)${NC}"
-    echo " 0. 返回主菜单"
-    echo "-------------------------"
+    echo -e "-------------------------"
+    echo -e " 1. 重启服务"
+    echo -e " 2. 停止服务"
+    echo -e " 3. 启动服务"
+    echo -e " 4. 查看状态"
+    echo -e " 5. ${YELLOW}查看实时日志 (临时开启)${NC}"
+    echo -e " 0. 返回主菜单"
+    echo -e "-------------------------"
     read -p "请输入选项: " sub_choice
     case $sub_choice in
         1) systemctl restart sing-box; echo -e "${GREEN}服务已重启。${NC}"; sleep 1 ;;
@@ -230,12 +222,9 @@ manage_service() {
             echo -e "${GREEN}日志已临时开启。正在显示日志...${NC}"
             echo -e "${YELLOW}按 Ctrl+C 即可停止查看并自动关闭日志。${NC}"
             sleep 2
-            # Set a trap to catch Ctrl+C (SIGINT) and run the cleanup function
             trap disable_logs_and_restart SIGINT
             journalctl -u sing-box -f --no-pager
-            # If journalctl exits for any reason, run cleanup
             disable_logs_and_restart
-            # Clear the trap
             trap - SIGINT
             ;;
         *) return ;;
@@ -252,10 +241,13 @@ uninstall_vrv() {
     echo -e "${GREEN}Sing-Box-VRV 已被彻底移除。${NC}"
 }
 
+# --- FIXED: Added 'hash -r' for immediate command availability ---
 install_script() {
     echo -e "${BLUE}>>> 正在安装管理脚本...${NC}"
     cp -f "$0" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"
     ln -sf "$INSTALL_PATH" "$SHORTCUT_PATH"
+    # This is the key command to make 'sbv' immediately available in the current session
+    hash -r
     echo -e "${GREEN}管理脚本及快捷命令 'sbv' 已创建。${NC}"
 }
 
@@ -286,14 +278,12 @@ main_menu() {
     echo -e "======================================================"
     echo -e "${GREEN}      Sing-Box-VRV 管理平台 v${SCRIPT_VERSION}      ${NC}"
     echo -e "======================================================"
-    # Main Options
     if [[ ! -f "$CONFIG_PATH" ]]; then echo -e " 1. ${GREEN}安装 Sing-Box-VRV${NC}"; else echo -e " 1. ${YELLOW}重新安装 Sing-Box-VRV${NC}"; fi
     echo -e " 2. 查看配置信息"
     echo -e " 3. 更换 Reality 域名"
     echo -e " 4. 管理 sing-box 服务"
     echo -e " 5. ${YELLOW}验证 Reality 域名${NC}"
     echo -e "------------------------------------------------------"
-    # Update and Uninstall
     echo -e " 8. 更新 sing-box 核心"
     echo -e " 9. ${BLUE}检查脚本更新${NC}"
     echo -e " 0. ${RED}彻底卸载 Sing-Box-VRV${NC}"
