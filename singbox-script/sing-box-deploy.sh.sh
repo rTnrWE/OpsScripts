@@ -4,9 +4,10 @@
 #
 #          FILE: sing-box-deploy.sh
 #
-#         USAGE: bash <(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/sing-box-deploy.sh)
+#         USAGE: bash <(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/sing-box-deploy.sh.sh)
 #
-#   DESCRIPTION: A script to install and manage sing-box with VLESS+Reality+Vision.
+#   DESCRIPTION: An optimized script to install and manage sing-box with VLESS+Reality+Vision.
+#                It automates IP detection and simplifies the configuration process for Reality.
 #
 #       OPTIONS: ---
 #  REQUIREMENTS: curl, openssl, jq
@@ -15,7 +16,7 @@
 #        AUTHOR: Your Name
 #  ORGANIZATION:
 #       CREATED: $(date +'%Y-%m-%d %H:%M:%S')
-#      REVISION: 1.2
+#      REVISION: 1.3
 #
 #================================================================================
 
@@ -40,26 +41,26 @@ check_root() {
     fi
 }
 
-# Check for required dependencies and install if missing
+# Check for required dependencies
 check_dependencies() {
-    if ! command -v jq &> /dev/null; then
-        echo -e "${YELLOW}检测到 'jq' 未安装，正在尝试自动安装...${NC}"
-        if apt-get update && apt-get install -y jq; then
-            echo -e "${GREEN}'jq' 安装成功。${NC}"
-        else
-            echo -e "${RED}错误：'jq' 自动安装失败。请手动安装后再运行此脚本。${NC}"
-            exit 1
+    for cmd in curl jq openssl; do
+        if ! command -v $cmd &> /dev/null; then
+            echo -e "${YELLOW}检测到 '$cmd' 未安装，正在尝试自动安装...${NC}"
+            if apt-get update && apt-get install -y $cmd; then
+                echo -e "${GREEN}'$cmd' 安装成功。${NC}"
+            else
+                echo -e "${RED}错误：'$cmd' 自动安装失败。请手动安装 (e.g., 'apt install $cmd') 后再运行此脚本。${NC}"
+                exit 1
+            fi
         fi
-    fi
+    done
 }
-
 
 # Install sing-box core
 install_singbox_core() {
     echo -e "${BLUE}>>> 正在从官方源安装/更新 sing-box 最新稳定版...${NC}"
-    # The official script always fetches the latest stable version
     if ! bash <(curl -fsSL https://sing-box.app/deb-install.sh); then
-        echo -e "${RED}sing-box 核心安装失败。请检查网络连接或系统环境。${NC}"
+        echo -e "${RED}sing-box 核心安装失败。请检查网络连接。${NC}"
         exit 1
     fi
     echo -e "${GREEN}sing-box 核心安装成功！版本：$($SINGBOX_BINARY version | head -n 1)${NC}"
@@ -68,23 +69,16 @@ install_singbox_core() {
 # Generate configuration file
 generate_config() {
     echo -e "${BLUE}>>> 正在配置 VLESS + Reality + Vision...${NC}"
-
-    # Prompt user for settings
-    read -p "请输入您的服务器域名 (SNI) [必须提供，例如：my.domain.com]: " server_name
-    if [[ -z "$server_name" ]]; then
-        echo -e "${RED}错误：服务器域名不能为空。${NC}"
-        exit 1
-    fi
     
-    read -p "请输入监听端口 [默认 443]: " listen_port
-    listen_port=${listen_port:-443}
-
-    read -p "请输入 Reality 握手目标域名 (dest) [默认 www.microsoft.com]: " handshake_server
+    # --- Simplified Interaction for Reality ---
+    local listen_port=443
+    echo -e "Reality 模式将监听标准 HTTPS 端口: ${YELLOW}${listen_port}${NC}"
+    echo -e "我们需要一个知名网站域名用于伪装，客户端将假装访问此域名。"
+    read -p "请输入伪装域名 (SNI/Dest) [默认 www.microsoft.com]: " handshake_server
     handshake_server=${handshake_server:-www.microsoft.com}
 
     echo -e "${YELLOW}正在生成 Reality 密钥对、UUID 和 Short ID...${NC}"
 
-    # Generate keys and IDs
     key_pair=$($SINGBOX_BINARY generate reality-keypair)
     private_key=$(echo "$key_pair" | awk '/PrivateKey/ {print $2}' | tr -d '"')
     public_key=$(echo "$key_pair" | awk '/PublicKey/ {print $2}' | tr -d '"')
@@ -92,11 +86,9 @@ generate_config() {
     short_id=$(openssl rand -hex 8)
 
     echo -e "${GREEN}密钥和 ID 生成完毕。${NC}"
-
-    # Create config directory if it doesn't exist
     mkdir -p /etc/sing-box
 
-    # Write the configuration file with logging completely disabled
+    # Write the configuration file
     tee "$CONFIG_PATH" > /dev/null <<EOF
 {
   "log": {
@@ -118,7 +110,7 @@ generate_config() {
       ],
       "tls": {
         "enabled": true,
-        "server_name": "${server_name}",
+        "server_name": "${handshake_server}",
         "reality": {
           "enabled": true,
           "handshake": {
@@ -144,9 +136,7 @@ EOF
 
     echo -e "${GREEN}配置文件已生成于 ${CONFIG_PATH}${NC}"
     
-    # Store variables for summary
     export _uuid=${uuid}
-    export _server_name=${server_name}
     export _listen_port=${listen_port}
     export _public_key=${public_key}
     export _short_id=${short_id}
@@ -160,7 +150,7 @@ start_service() {
     systemctl enable sing-box >/dev/null 2>&1
     systemctl restart sing-box
     
-    sleep 2 # Wait a bit for the service to start
+    sleep 2
 
     if systemctl is-active --quiet sing-box; then
         echo -e "${GREEN}提示：sing-box 服务已成功启动并正在运行！${NC}"
@@ -172,119 +162,85 @@ start_service() {
 
 # Show summary and client connection link
 show_summary() {
+    echo -e "\n${YELLOW}正在自动检测服务器公网 IP...${NC}"
+    server_ip=$(curl -s icanhazip.com)
+    if [[ -z "$server_ip" ]]; then
+        echo -e "${RED}未能自动检测到公网 IP。请将下面的 [YOUR_SERVER_IP] 手动替换为你的服务器 IP。${NC}"
+        server_ip="[YOUR_SERVER_IP]"
+    fi
+
     tag_encoded=$(printf "VLESS-Reality" | jq -s -R -r @uri)
-    vless_link="vless://${_uuid}@${_server_name}:${_listen_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${_server_name}&fp=chrome&pbk=${_public_key}&sid=${_short_id}&type=tcp&headerType=none#${tag_encoded}"
+    vless_link="vless://${_uuid}@${server_ip}:${_listen_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${_handshake_server}&fp=chrome&pbk=${_public_key}&sid=${_short_id}&type=tcp&headerType=none#${tag_encoded}"
 
     echo -e "\n=================================================="
     echo -e "${GREEN}      sing-box VLESS+Reality 安装完成！      ${NC}"
     echo -e "=================================================="
     echo -e "${YELLOW}你的配置信息:${NC}"
-    echo -e "  - 服务器地址 (Address):   ${BLUE}${_server_name}${NC}"
+    echo -e "  - 服务器地址 (Address):   ${BLUE}${server_ip}${NC}"
     echo -e "  - 端口 (Port):              ${BLUE}${_listen_port}${NC}"
     echo -e "  - UUID:                   ${BLUE}${_uuid}${NC}"
     echo -e "  - Public Key:             ${BLUE}${_public_key}${NC}"
     echo -e "  - Short ID:               ${BLUE}${_short_id}${NC}"
-    echo -e "  - 协议 (Flow):            ${BLUE}xtls-rprx-vision${NC}"
+    echo -e "  - 伪装域名 (SNI):         ${BLUE}${_handshake_server}${NC}"
     echo -e "--------------------------------------------------"
     echo -e "${GREEN}客户端导入链接 (VLESS URL):${NC}"
     echo -e "${BLUE}${vless_link}${NC}"
     echo -e "--------------------------------------------------"
 }
 
-# Uninstall sing-box
+# Other functions (uninstall, manage_service, validate_reality_domain, update_singbox) remain the same...
+
 uninstall() {
     echo -e "${RED}警告：此操作将停止并卸载 sing-box，并删除其配置文件。${NC}"
     read -p "你确定要继续吗? (y/N): " confirm
-    if [[ "${confirm,,}" != "y" ]]; then
-        echo "卸载操作已取消。"
-        exit 0
-    fi
-
-    systemctl stop sing-box
-    systemctl disable sing-box >/dev/null 2>&1
-    rm -f /etc/systemd/system/sing-box.service
-    systemctl daemon-reload
-    rm -rf /etc/sing-box
-    rm -f $SINGBOX_BINARY
+    if [[ "${confirm,,}" != "y" ]]; then echo "卸载操作已取消。"; exit 0; fi
+    systemctl stop sing-box; systemctl disable sing-box >/dev/null 2>&1
+    rm -f /etc/systemd/system/sing-box.service; systemctl daemon-reload
+    rm -rf /etc/sing-box; rm -f $SINGBOX_BINARY
     echo -e "${GREEN}sing-box 卸载完成。${NC}"
 }
 
-# Validate Reality Domain
-validate_reality_domain() {
-    clear
-    echo -e "${BLUE}--- Reality 域名可用性与稳定性测试 ---${NC}"
-    read -p "请输入你想测试的目标域名 (例如: www.microsoft.com): " domain_to_test
-    if [[ -z "$domain_to_test" ]]; then echo -e "\n${RED}域名不能为空。${NC}"; sleep 2; return; fi
-
-    echo -e "\n${YELLOW}正在对 ${domain_to_test} 进行 5 次 TLSv1.3 连接测试...${NC}"
-    local success_count=0
-    for i in {1..5}; do
-        echo -n "第 $i/5 次测试: "
-        if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 "https://${domain_to_test}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
-            echo -e "${GREEN}成功${NC}"; ((success_count++));
-        else
-            echo -e "${RED}失败${NC}";
-        fi
-        sleep 1
-    done
-    echo "--------------------------------------------------"
-    if [[ ${success_count} -eq 5 ]]; then echo -e "${GREEN}结论：该域名非常适合作为 Reality 目标。${NC}";
-    elif [[ ${success_count} -gt 0 ]]; then echo -e "${YELLOW}结论：该域名可用，但连接可能不稳定。${NC}";
-    else echo -e "${RED}结论：该域名不适合作为 Reality 目标。${NC}"; fi
-    echo "--------------------------------------------------"
-    read -p "按任意键返回主菜单..."
+manage_service() {
+    clear; echo -e "${BLUE}sing-box 服务管理菜单${NC}"; echo "------------------------"
+    echo "1. 启动"; echo "2. 停止"; echo "3. 重启"; echo "4. 状态"; echo "5. 日志"; echo "0. 返回"
+    read -p "请输入选项 [0-5]: " sub_choice
+    case $sub_choice in
+        1) systemctl start sing-box && echo "已启动" ;; 2) systemctl stop sing-box && echo "已停止" ;;
+        3) systemctl restart sing-box && echo "已重启" ;; 4) systemctl status sing-box ;;
+        5) journalctl -u sing-box -n 50 --no-pager ;; 0) return ;;
+        *) echo "无效选项" ;;
+    esac; read -p "按任意键返回..."
 }
 
-# --- NEW FUNCTION ---
-# Check for updates and manually update sing-box
+validate_reality_domain() {
+    clear; echo -e "${BLUE}--- Reality 域名可用性测试 ---${NC}"; read -p "请输入你想测试的目标域名: " domain_to_test
+    if [[ -z "$domain_to_test" ]]; then echo -e "\n${RED}域名不能为空。${NC}"; sleep 2; return; fi
+    echo -e "\n${YELLOW}正在对 ${domain_to_test} 进行 5 次 TLSv1.3 连接测试...${NC}"; local success_count=0
+    for i in {1..5}; do
+        echo -n "第 $i/5 次测试: "; if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 "https://${domain_to_test}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then echo -e "${GREEN}成功${NC}"; ((success_count++)); else echo -e "${RED}失败${NC}"; fi; sleep 1
+    done
+    echo "--------------------------------------------------"; if [[ ${success_count} -eq 5 ]]; then echo -e "${GREEN}结论：该域名非常适合。${NC}"; elif [[ ${success_count} -gt 0 ]]; then echo -e "${YELLOW}结论：该域名可用但不稳定。${NC}"; else echo -e "${RED}结论：该域名不适合。${NC}"; fi
+    echo "--------------------------------------------------"; read -p "按任意键返回..."
+}
+
 update_singbox() {
-    clear
-    echo -e "${BLUE}--- 检查并更新 sing-box 核心 ---${NC}"
-    if [[ ! -f "$SINGBOX_BINARY" ]]; then
-        echo -e "${RED}错误：sing-box 未安装，无法更新。${NC}"
-        read -p "按任意键返回..."
-        return
-    fi
-
-    # Get current version (e.g., 1.8.0)
-    current_ver=$($SINGBOX_BINARY version | awk 'NR==1 {print $3}')
-
-    # Get latest version from GitHub API (e.g., 1.8.1)
-    echo -e "${YELLOW}正在从 GitHub 获取最新版本信息...${NC}"
+    clear; echo -e "${BLUE}--- 检查并更新 sing-box 核心 ---${NC}"; if [[ ! -f "$SINGBOX_BINARY" ]]; then echo -e "${RED}错误：sing-box 未安装。${NC}"; read -p "按任意键返回..."; return; fi
+    current_ver=$($SINGBOX_BINARY version | awk 'NR==1 {print $3}'); echo -e "${YELLOW}正在获取最新版本信息...${NC}"
     latest_ver_tag=$(curl --connect-timeout 10 -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name')
-    
-    if [[ -z "$latest_ver_tag" ]]; then
-        echo -e "${RED}获取最新版本信息失败，请检查网络或稍后再试。${NC}"
-        read -p "按任意键返回..."
-        return
-    fi
-    latest_ver=${latest_ver_tag#v} # remove 'v' prefix
-
-    echo -e "当前已安装版本: ${BLUE}${current_ver}${NC}"
-    echo -e "GitHub 最新版本: ${GREEN}${latest_ver}${NC}"
-    echo "--------------------------------------------------"
-
-    if [[ "$current_ver" == "$latest_ver" ]]; then
-        echo -e "${GREEN}恭喜！你的 sing-box 已是最新版本。${NC}"
-    else
-        echo -e "${YELLOW}发现新版本: ${latest_ver}${NC}"
-        read -p "是否立即更新? (y/N): " confirm
-        if [[ "${confirm,,}" == "y" ]]; then
-            install_singbox_core # Re-run the official installer to update
-            systemctl restart sing-box
-            echo -e "${GREEN}sing-box 已成功更新并重启服务！${NC}"
-        else
-            echo "更新操作已取消。"
-        fi
-    fi
-    read -p "按任意键返回主菜单..."
+    if [[ -z "$latest_ver_tag" ]]; then echo -e "${RED}获取最新版本信息失败。${NC}"; read -p "按任意键返回..."; return; fi
+    latest_ver=${latest_ver_tag#v}; echo "当前版本: ${BLUE}${current_ver}${NC} | 最新版本: ${GREEN}${latest_ver}${NC}"
+    if [[ "$current_ver" == "$latest_ver" ]]; then echo -e "${GREEN}已是最新版本。${NC}"; else
+        read -p "发现新版本，是否更新? (y/N): " confirm; if [[ "${confirm,,}" == "y" ]]; then
+            install_singbox_core; systemctl restart sing-box; echo -e "${GREEN}更新成功并已重启服务！${NC}"; fi
+    fi; read -p "按任意键返回..."
 }
 
 # Main menu
 main_menu() {
     clear
     echo -e "======================================================"
-    echo -e "${GREEN}      sing-box VLESS+Reality 一键部署脚本 (v1.2)      ${NC}"
+    echo -e "${GREEN}   sing-box VLESS+Reality 一键部署脚本 (v1.3)   ${NC}"
+    echo -e "${GREEN}          (Reality 优化，减少交互)          ${NC}"
     echo -e "======================================================"
     echo -e "1. ${GREEN}安装 sing-box${NC}"
     echo -e "2. ${RED}卸载 sing-box${NC}"
@@ -297,12 +253,12 @@ main_menu() {
 
     case $choice in
         1) install_singbox_core; generate_config; start_service; show_summary ;;
-        2) uninstall ;;
+        2) uninstall; exit 0 ;;
         3) manage_service; main_menu ;;
         4) validate_reality_domain; main_menu ;;
         5) update_singbox; main_menu ;;
         0) exit 0 ;;
-        *) echo -e "${RED}无效选项，请重新输入。${NC}"; sleep 2; main_menu ;;
+        *) echo -e "${RED}无效选项。${NC}"; sleep 2; main_menu ;;
     esac
 }
 
