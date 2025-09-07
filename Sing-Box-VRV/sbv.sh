@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.3
+# REVISION:     3.4
 #================================================================================
 
-SCRIPT_VERSION="3.3"
+SCRIPT_VERSION="3.4"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -53,7 +53,9 @@ generate_config() {
     echo ">>> 正在配置 VLESS + Reality + Vision..."
     local handshake_server
     while true; do
+        echo -en "${GREEN}"
         read -p "请输入 Reality 域名 [默认 www.microsoft.com]: " handshake_server
+        echo -en "${NC}"
         handshake_server=${handshake_server:-www.microsoft.com}
         if internal_validate_domain "$handshake_server"; then
             break
@@ -120,10 +122,10 @@ show_summary() {
     echo -e "\n=================================================="
     echo "    Sing-Box-(VLESS+Reality+Vision) 配置    "
     echo "=================================================="
-    printf "  %-22s: %s\n" "服务端配置文件" "$CONFIG_PATH"
+    printf "  %-22s: ${GREEN}%s${NC}\n" "服务端配置文件" "$CONFIG_PATH"
     echo "--------------------------------------------------"
     echo -e "${GREEN}VLESS 导入链接:${NC}"
-    echo "$vless_link"
+    echo -e "${GREEN}${vless_link}${NC}"
     
     show_client_config_format
 }
@@ -143,19 +145,19 @@ install_vrv() {
     echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
 
     if [[ "$first_time_install" == true ]]; then
-        echo -e "\n${GREEN}安装完成！管理脚本已启动，您可以继续操作。${NC}"
-        echo "下次您可以随时通过以下命令来运行本平台："
-        echo "  cd /root && ./sbv.sh"
-        echo "正在重新加载脚本..."
-        sleep 3
-        exec bash "$INSTALL_PATH"
+        echo -e "\n${GREEN}安装完成！${NC}"
+        echo "您可以随时通过以下命令再次打开管理平台："
+        echo "  ./sbv.sh"
+        exit 0
     fi
 }
 
 change_reality_domain() {
     local new_domain
     while true; do
+        echo -en "${GREEN}"
         read -p "请输入新的 Reality 域名: " new_domain
+        echo -en "${NC}"
         [[ -z "$new_domain" ]] && { echo -e "${RED}域名不能为空。${NC}"; continue; }
         if internal_validate_domain "$new_domain"; then
             break
@@ -289,7 +291,7 @@ main_menu() {
 
     if [[ "$is_installed" == true ]]; then
         case "${choice,,}" in
-            1) install_vrv ;;
+            1) install_vrv; exit 0 ;;
             2) show_summary ;;
             3) change_reality_domain ;;
             4) manage_service ;;
@@ -301,6 +303,7 @@ main_menu() {
             *) echo -e "${RED}无效选项。${NC}" ;;
         esac
     fi
+    # Only show "Press any key" for non-install/exit options
     read -n 1 -s -r -p "按任意键返回主菜单..."
     main_menu
 }
