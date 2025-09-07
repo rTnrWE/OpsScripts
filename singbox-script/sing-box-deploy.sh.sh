@@ -7,7 +7,7 @@
 #         USAGE: bash <(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/sing-box-deploy.sh.sh)
 #
 #   DESCRIPTION: An optimized script to install and manage sing-box with VLESS+Reality+Vision.
-#                It automates IP detection and simplifies the configuration process for Reality.
+#                Features automated IP detection, dynamic binary path finding, and a streamlined UI.
 #
 #       OPTIONS: ---
 #  REQUIREMENTS: curl, openssl, jq
@@ -16,7 +16,7 @@
 #        AUTHOR: Your Name
 #  ORGANIZATION:
 #       CREATED: $(date +'%Y-%m-%d %H:%M:%S')
-#      REVISION: 1.3
+#      REVISION: 1.5
 #
 #================================================================================
 
@@ -29,11 +29,10 @@ NC='\033[0m' # No Color
 
 # Global variables
 CONFIG_PATH="/etc/sing-box/config.json"
-SINGBOX_BINARY="/usr/local/bin/sing-box"
+SINGBOX_BINARY=""
 
 # --- Function Definitions ---
 
-# Check if running as root
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
         echo -e "${RED}错误：此脚本必须以 root 权限运行。${NC}"
@@ -41,39 +40,56 @@ check_root() {
     fi
 }
 
-# Check for required dependencies
 check_dependencies() {
     for cmd in curl jq openssl; do
         if ! command -v $cmd &> /dev/null; then
             echo -e "${YELLOW}检测到 '$cmd' 未安装，正在尝试自动安装...${NC}"
-            if apt-get update && apt-get install -y $cmd; then
-                echo -e "${GREEN}'$cmd' 安装成功。${NC}"
+            # Simple package manager detection
+            if command -v apt-get &> /dev/null; then
+                apt-get update && apt-get install -y $cmd
+            elif command -v yum &> /dev/null; then
+                yum install -y $cmd
+            elif command -v dnf &> /dev/null; then
+                dnf install -y $cmd
             else
-                echo -e "${RED}错误：'$cmd' 自动安装失败。请手动安装 (e.g., 'apt install $cmd') 后再运行此脚本。${NC}"
+                echo -e "${RED}无法确定包管理器。请手动安装 '$cmd'。${NC}"
                 exit 1
             fi
+
+            if ! command -v $cmd &> /dev/null; then
+                 echo -e "${RED}错误：'$cmd' 自动安装失败。请手动安装后再运行此脚本。${NC}"
+                 exit 1
+            fi
+            echo -e "${GREEN}'$cmd' 安装成功。${NC}"
         fi
     done
 }
 
-# Install sing-box core
 install_singbox_core() {
     echo -e "${BLUE}>>> 正在从官方源安装/更新 sing-box 最新稳定版...${NC}"
     if ! bash <(curl -fsSL https://sing-box.app/deb-install.sh); then
-        echo -e "${RED}sing-box 核心安装失败。请检查网络连接。${NC}"
+        echo -e "${RED}sing-box 核心安装脚本执行失败。请检查网络或脚本输出。${NC}"
         exit 1
     fi
-    echo -e "${GREEN}sing-box 核心安装成功！版本：$($SINGBOX_BINARY version | head -n 1)${NC}"
+
+    local found_path
+    found_path=$(command -v sing-box)
+    if [[ -z "$found_path" || ! -x "$found_path" ]]; then
+        echo -e "${RED}错误：安装后未能找到 sing-box 可执行文件。安装过程可能已失败。${NC}"
+        exit 1
+    fi
+    SINGBOX_BINARY="$found_path"
+    echo -e "${GREEN}sing-box 核心安装成功！路径: ${BLUE}${SINGBOX_BINARY}${NC}"
+    echo -e "${GREEN}版本：$($SINGBOX_BINARY version | head -n 1)${NC}"
 }
 
-# Generate configuration file
 generate_config() {
     echo -e "${BLUE}>>> 正在配置 VLESS + Reality + Vision...${NC}"
     
-    # --- Simplified Interaction for Reality ---
     local listen_port=443
     echo -e "Reality 模式将监听标准 HTTPS 端口: ${YELLOW}${listen_port}${NC}"
-    echo -e "我们需要一个知名网站域名用于伪装，客户端将假装访问此域名。"
+    
+    # --- MODIFIED: Removed the unnecessary explanatory line ---
     read -p "请输入伪装域名 (SNI/Dest) [默认 www.microsoft.com]: " handshake_server
     handshake_server=${handshake_server:-www.microsoft.com}
 
@@ -88,7 +104,6 @@ generate_config() {
     echo -e "${GREEN}密钥和 ID 生成完毕。${NC}"
     mkdir -p /etc/sing-box
 
-    # Write the configuration file
     tee "$CONFIG_PATH" > /dev/null <<EOF
 {
   "log": {
@@ -143,7 +158,6 @@ EOF
     export _handshake_server=${handshake_server}
 }
 
-# Start and enable sing-box service
 start_service() {
     echo -e "${BLUE}>>> 正在启动并设置 sing-box 开机自启...${NC}"
     systemctl daemon-reload
@@ -160,10 +174,9 @@ start_service() {
     fi
 }
 
-# Show summary and client connection link
 show_summary() {
     echo -e "\n${YELLOW}正在自动检测服务器公网 IP...${NC}"
-    server_ip=$(curl -s icanhazip.com)
+    server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com)
     if [[ -z "$server_ip" ]]; then
         echo -e "${RED}未能自动检测到公网 IP。请将下面的 [YOUR_SERVER_IP] 手动替换为你的服务器 IP。${NC}"
         server_ip="[YOUR_SERVER_IP]"
@@ -188,15 +201,16 @@ show_summary() {
     echo -e "--------------------------------------------------"
 }
 
-# Other functions (uninstall, manage_service, validate_reality_domain, update_singbox) remain the same...
-
 uninstall() {
     echo -e "${RED}警告：此操作将停止并卸载 sing-box，并删除其配置文件。${NC}"
     read -p "你确定要继续吗? (y/N): " confirm
     if [[ "${confirm,,}" != "y" ]]; then echo "卸载操作已取消。"; exit 0; fi
     systemctl stop sing-box; systemctl disable sing-box >/dev/null 2>&1
     rm -f /etc/systemd/system/sing-box.service; systemctl daemon-reload
-    rm -rf /etc/sing-box; rm -f $SINGBOX_BINARY
+    # Find path before removing
+    local bin_path=$(command -v sing-box)
+    rm -rf /etc/sing-box; 
+    if [[ -n "$bin_path" ]]; then rm -f "$bin_path"; fi
     echo -e "${GREEN}sing-box 卸载完成。${NC}"
 }
 
@@ -224,6 +238,7 @@ validate_reality_domain() {
 }
 
 update_singbox() {
+    if [[ -z "$SINGBOX_BINARY" ]]; then SINGBOX_BINARY=$(command -v sing-box); fi
     clear; echo -e "${BLUE}--- 检查并更新 sing-box 核心 ---${NC}"; if [[ ! -f "$SINGBOX_BINARY" ]]; then echo -e "${RED}错误：sing-box 未安装。${NC}"; read -p "按任意键返回..."; return; fi
     current_ver=$($SINGBOX_BINARY version | awk 'NR==1 {print $3}'); echo -e "${YELLOW}正在获取最新版本信息...${NC}"
     latest_ver_tag=$(curl --connect-timeout 10 -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name')
@@ -235,12 +250,12 @@ update_singbox() {
     fi; read -p "按任意键返回..."
 }
 
-# Main menu
 main_menu() {
+    if [[ -z "$SINGBOX_BINARY" ]]; then SINGBOX_BINARY=$(command -v sing-box); fi
     clear
     echo -e "======================================================"
-    echo -e "${GREEN}   sing-box VLESS+Reality 一键部署脚本 (v1.3)   ${NC}"
-    echo -e "${GREEN}          (Reality 优化，减少交互)          ${NC}"
+    echo -e "${GREEN}   sing-box VLESS+Reality 一键部署脚本 (v1.5)   ${NC}"
+    echo -e "${GREEN}             (精简交互，增强体验)             ${NC}"
     echo -e "======================================================"
     echo -e "1. ${GREEN}安装 sing-box${NC}"
     echo -e "2. ${RED}卸载 sing-box${NC}"
