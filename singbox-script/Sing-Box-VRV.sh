@@ -4,24 +4,23 @@
 #
 #          FILE: Sing-Box-VRV.sh
 #
-#         USAGE: bash <(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/Sing-Box-VRV.sh)
-#                The 'sbv' command is available IMMEDIATELY after installation.
+#         USAGE: See the initial instructions provided by the curl command.
+#                The 'sbv' command becomes available IMMEDIATELY and RELIABLY after installation.
 #
 #   DESCRIPTION: A professional management platform for Sing-Box using the
 #                VLESS+Reality+Vision (VRV) configuration.
-#                Features on-demand logging and a seamless user experience.
 #
 #       OPTIONS: ---
 #  REQUIREMENTS: curl, openssl, jq
 #        AUTHOR: Your Name
 #  ORGANIZATION:
 #       CREATED: $(date +'%Y-%m-%d %H:%M:%S')
-#      REVISION: 2.5
+#      REVISION: 2.6
 #
 #================================================================================
 
 # --- Script Metadata and Configuration ---
-SCRIPT_VERSION="2.5"
+SCRIPT_VERSION="2.6"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/singbox-script/Sing-Box-VRV.sh"
 INSTALL_PATH="/usr/local/sbin/sing-box-vrv.sh"
 SHORTCUT_PATH="/usr/local/bin/sbv"
@@ -60,7 +59,7 @@ install_singbox_core() {
 internal_validate_domain() {
     local domain="$1"
     echo -n -e "${YELLOW}正在快速验证 ${domain} ... ${NC}"
-    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
         echo -e "${GREEN}成功！${NC}"; return 0
     else
         echo -e "${RED}失败！${NC}"; return 1
@@ -141,29 +140,18 @@ show_summary() {
     show_client_config_format
 }
 
-
 # --- Management Functions ---
 
 install_vrv() {
     echo -e "${BLUE}--- 开始安装 Sing-Box-VRV ---${NC}"
-    local first_time_install=false
-    if [[ "$(realpath "$0")" != "$INSTALL_PATH" ]]; then
-        first_time_install=true
-        install_script
-    fi
-    
+    install_script
     install_singbox_core || return 1
     generate_config || return 1
     start_service || return 1
     show_summary
     echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
-
-    if [[ "$first_time_install" == true ]]; then
-        echo -e "\n${GREEN}安装完成！管理脚本已启动，您可以继续操作。${NC}"
-        echo -e "${YELLOW}下次登录后，您可以随时使用 '${BLUE}sbv${YELLOW}' 命令来运行此平台。${NC}"
-        # Execute the script from its permanent location to continue the session seamlessly
-        exec "$INSTALL_PATH"
-    fi
+    echo -e "${GREEN}管理平台已准备就绪，您可以继续在当前菜单中操作。${NC}"
+    echo -e "${YELLOW}下次您可以随时使用 '${BLUE}sbv${YELLOW}' 命令来运行此平台。${NC}"
 }
 
 change_reality_domain() {
@@ -190,7 +178,6 @@ change_reality_domain() {
     show_summary
 }
 
-# --- FIXED: 'echo -e' for all menu items ---
 manage_service() {
     disable_logs_and_restart() {
         echo -e "\n${YELLOW}>>> 正在关闭日志并恢复服务...${NC}"
@@ -241,22 +228,27 @@ uninstall_vrv() {
     echo -e "${GREEN}Sing-Box-VRV 已被彻底移除。${NC}"
 }
 
-# --- FIXED: Added 'hash -r' for immediate command availability ---
 install_script() {
     echo -e "${BLUE}>>> 正在安装管理脚本...${NC}"
-    cp -f "$0" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"
+    # Use the current script's absolute path to copy
+    cp -f "$(realpath "$0")" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"
     ln -sf "$INSTALL_PATH" "$SHORTCUT_PATH"
     # This is the key command to make 'sbv' immediately available in the current session
     hash -r
-    echo -e "${GREEN}管理脚本及快捷命令 'sbv' 已创建。${NC}"
+    echo -e "${GREEN}管理脚本及快捷命令 'sbv' 已创建并立即可用。${NC}"
 }
 
 update_script() {
-    read -p "$(echo -e ${GREEN}"发现新版本，是否更新? (y/N): "${NC})" confirm
-    if [[ "${confirm,,}" == "y" ]]; then
-        local temp_script=$(mktemp)
-        if ! curl -fsSL "$SCRIPT_URL" -o "$temp_script"; then echo -e "${RED}下载新版本脚本失败。${NC}"; rm "$temp_script"; return; fi
-        mv "$temp_script" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"; echo -e "${GREEN}脚本已更新！正在重新加载...${NC}"; exec "$INSTALL_PATH"
+    echo -e "${BLUE}>>> 正在检查脚本更新...${NC}"
+    local temp_script=$(mktemp)
+    if ! curl -fsSL "$SCRIPT_URL" -o "$temp_script"; then echo -e "${RED}下载新版本脚本失败。${NC}"; rm "$temp_script"; return; fi
+    if ! diff -q "$INSTALL_PATH" "$temp_script" &>/dev/null; then
+        read -p "$(echo -e ${GREEN}"发现新版本，是否更新? (y/N): "${NC})" confirm
+        if [[ "${confirm,,}" == "y" ]]; then
+            mv "$temp_script" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"; echo -e "${GREEN}脚本已更新！正在重新加载...${NC}"; exec "$INSTALL_PATH"
+        fi
+    else
+        echo -e "${GREEN}脚本已是最新版本。${NC}"; rm "$temp_script"
     fi
 }
 
@@ -268,11 +260,12 @@ validate_reality_domain() {
     clear; echo -e "${BLUE}--- Reality 域名稳定性测试 ---${NC}"; read -p "请输入你想测试的目标域名: " domain
     if [[ -z "$domain" ]]; then echo -e "\n${RED}域名不能为空。${NC}"; return; fi
     echo -e "\n${YELLOW}正在进行 5 次 TLSv1.3 连接测试...${NC}"; local success=0
-    for i in {1..5}; do echo -n "第 $i/5 次测试: "; if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then echo -e "${GREEN}成功${NC}"; ((success++)); else echo -e "${RED}失败${NC}"; fi; sleep 1; done
+    for i in {1..5}; do echo -n "第 $i/5 次测试: "; if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 "https://domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then echo -e "${GREEN}成功${NC}"; ((success++)); else echo -e "${RED}失败${NC}"; fi; sleep 1; done
     echo "--------------------------------------------------"; if [[ $success -eq 5 ]]; then echo -e "${GREEN}结论：该域名非常适合。${NC}"; elif [[ $success -gt 0 ]]; then echo -e "${YELLOW}结论：可用但不稳定。${NC}"; else echo -e "${RED}结论：不适合。${NC}"; fi;
 }
 
-# --- Main Menu Logic ---
+
+# --- Main Menu & Entry Point ---
 main_menu() {
     clear
     echo -e "======================================================"
@@ -284,16 +277,15 @@ main_menu() {
     echo -e " 4. 管理 sing-box 服务"
     echo -e " 5. ${YELLOW}验证 Reality 域名${NC}"
     echo -e "------------------------------------------------------"
-    echo -e " 8. 更新 sing-box 核心"
-    echo -e " 9. ${BLUE}检查脚本更新${NC}"
-    echo -e " 0. ${RED}彻底卸载 Sing-Box-VRV${NC}"
-    echo -e "------------------------------------------------------"
-    echo -e " 99. 退出脚本"
+    echo -e " 7. 更新 sing-box 核心"
+    echo -e " 8. ${BLUE}检查脚本更新${NC}"
+    echo -e " 9. ${RED}彻底卸载 Sing-Box-VRV${NC}"
+    echo -e " 0. 退出脚本"
     echo -e "======================================================"
     read -p "请输入你的选项: " choice
 
     local is_installed=true
-    if [[ ! -f "$CONFIG_PATH" && ",2,3,4,8," == *",${choice},"* ]]; then
+    if [[ ! -f "$CONFIG_PATH" && ",2,3,4,7," == *",${choice},"* ]]; then
         echo -e "\n${RED}错误：请先安装 Sing-Box-VRV (选项1)。${NC}"; is_installed=false
     fi
 
@@ -304,10 +296,10 @@ main_menu() {
             3) change_reality_domain ;;
             4) manage_service ;;
             5) validate_reality_domain ;;
-            8) update_singbox_core ;;
-            9) if [[ -f "$INSTALL_PATH" ]]; then update_script; else echo -e "${RED}脚本尚未安装，无法更新。${NC}"; fi ;;
-            0) uninstall_vrv; exit 0 ;;
-            99) exit 0 ;;
+            7) update_singbox_core ;;
+            8) if [[ -f "$INSTALL_PATH" ]]; then update_script; else echo -e "${RED}脚本尚未安装，无法更新。${NC}"; fi ;;
+            9) uninstall_vrv; exit 0 ;;
+            0) exit 0 ;;
             *) echo -e "${RED}无效选项。${NC}" ;;
         esac
     fi
@@ -316,6 +308,49 @@ main_menu() {
 }
 
 # --- Script Entry Point ---
+# If this variable is not set, it's the first run from curl
+if [[ -z "$SBV_SOURCED" ]]; then
+    # Download self to a temp file
+    TMP_SCRIPT=$(mktemp)
+    if ! curl -fsSL "$SCRIPT_URL" -o "$TMP_SCRIPT"; then
+        echo -e "${RED}错误：无法下载管理脚本。请检查网络连接和URL。${NC}"
+        exit 1
+    fi
+    
+    clear
+    echo -e "======================================================"
+    echo -e "${GREEN}    欢迎使用 Sing-Box-VRV v${SCRIPT_VERSION} 管理平台    ${NC}"
+    echo -e "======================================================"
+    echo -e "为了保证所有功能 (尤其是 'sbv' 命令) 立即生效，"
+    echo -e "脚本需要在您当前的 Shell 环境中运行。"
+    echo
+    echo -e "${YELLOW}请复制下面的命令，然后粘贴并执行：${NC}"
+    echo
+    echo -e "  ${BLUE}source ${TMP_SCRIPT}${NC}"
+    echo
+    exit 0
+fi
+
+# If the script is sourced or run via 'sbv', it continues here
 check_root
 check_dependencies
-main_menu
+main_menu```
+
+### 全新工作流程
+
+1.  **首次运行** (例如，`bash <(curl ...)`):
+    *   脚本会**立即停止**，并显示一个清晰的欢迎界面。
+    *   界面上会有一条**唯一的、需要您执行的命令**：`source /tmp/随机文件名`。
+    *   您只需**复制这条命令，粘贴，然后回车**。
+
+2.  **`source` 命令执行后**：
+    *   脚本会**在您当前的 Shell 中**启动，并显示**功能齐全的主菜单**。
+    *   您选择 **`1`** (安装)。
+    *   脚本会完成所有安装步骤，包括创建 `sbv` 命令并**使用 `hash -r` 更新您的 Shell 记忆**。
+    *   安装结束后，您会看到配置信息，然后返回主菜单。**此时，`sbv` 命令已经可以在您的这个 Shell 会话中使用了。**
+
+3.  **日常管理**：
+    *   您可以直接在当前菜单中继续操作。
+    *   当您退出后，下次登录时，`sbv` 命令将保证可用。
+
+这个 `v2.6` 版本通过改变交互模式，从根本上解决了 Shell 环境隔离带来的所有问题，为您提供了最可靠、最专业的体验。
