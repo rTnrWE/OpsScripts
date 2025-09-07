@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.5
+# REVISION:     3.6
 #================================================================================
 
-SCRIPT_VERSION="3.5"
+SCRIPT_VERSION="3.6"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -142,36 +142,36 @@ install_vrv() {
         case "$reinstall_choice" in
             1)
                 echo "--- 正在使用旧配置重装核心 ---"
-                install_singbox_core || return 1
-                start_service || return 1
+                install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
                 show_summary
                 echo -e "\n${GREEN}--- Sing-Box-VRV 核心重装成功 ---${NC}"
-                return 0
                 ;;
             2)
                 echo "--- 开始全新安装 (将覆盖旧数据) ---"
                 rm -rf /etc/sing-box
+                install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                show_summary
+                echo -e "\n${GREEN}--- Sing-Box-VRV 全新安装成功 ---${NC}"
                 ;;
             *)
                 echo "操作已取消。"; return 0 ;;
         esac
     else
-        echo "--- 开始安装 Sing-Box-VRV ---"
+        echo "--- 开始首次安装 Sing-Box-VRV ---"
         install_script
+        install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+        generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+        start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+        show_summary
+        echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
     fi
     
-    install_singbox_core || return 1
-    generate_config || return 1
-    start_service || return 1
-    show_summary
-    echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
-
-    if [[ "$first_time_install" == true ]]; then
-        echo -e "\n${GREEN}安装完成！${NC}"
-        echo "您可以随时通过再次运行以下命令来管理平台："
-        echo -e "  ${GREEN}./sbv.sh${NC}"
-        # Exit after first time install, no longer exec.
-    fi
+    echo -e "\n${GREEN}安装/重装流程已完成！${NC}"
+    echo "您可以随时通过再次运行以下命令来管理平台："
+    echo -e "  ${GREEN}./sbv.sh${NC}"
 }
 
 change_reality_domain() {
