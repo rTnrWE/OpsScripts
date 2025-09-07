@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.2
+# REVISION:     3.3
 #================================================================================
 
-SCRIPT_VERSION="3.2"
+SCRIPT_VERSION="3.3"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -100,10 +100,11 @@ show_client_config_format() {
     local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
     
     echo "--------------------------------------------------"
-    echo -e "${GREEN}客户端手动配置参数:${NC}"
+    echo -e "${GREEN}客户端配置:${NC}"
     printf "  %-14s: %s\n" "server" "$server_ip"
     printf "  %-14s: %s\n" "port" "$LISTEN_PORT"
     printf "  %-14s: %s\n" "uuid" "$UUID"
+    printf "  %-14s: %s\n" "flow" "xtls-rprx-vision"
     printf "  %-14s: %s\n" "servername" "$HANDSHAKE_SERVER"
     printf "  %-14s: %s\n" "public-key" "$PUBLIC_KEY"
     printf "  %-14s: %s\n" "short-id" "$SHORT_ID"
@@ -117,7 +118,7 @@ show_summary() {
     local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
 
     echo -e "\n=================================================="
-    echo "       Sing-Box-VRV (VLESS+Reality) 配置       "
+    echo "    Sing-Box-(VLESS+Reality+Vision) 配置    "
     echo "=================================================="
     printf "  %-22s: %s\n" "服务端配置文件" "$CONFIG_PATH"
     echo "--------------------------------------------------"
@@ -243,7 +244,7 @@ update_script() {
     if ! curl -fsSL "$SCRIPT_URL" -o "$temp_script"; then echo -e "${RED}下载新版本脚本失败。${NC}"; rm "$temp_script"; return; fi
     if ! diff -q "$INSTALL_PATH" "$temp_script" &>/dev/null; then
         read -p "$(echo -e ${GREEN}"发现新版本，是否更新? (y/N): "${NC})" confirm
-        if [[ "${confirm,,}" == "y" ]]; then
+        if [[ "${confirm,,}" != "n" ]]; then
             mv "$temp_script" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"; echo -e "${GREEN}脚本已更新！正在重新加载...${NC}"; exec bash "$INSTALL_PATH"
         fi
     else
@@ -276,7 +277,7 @@ main_menu() {
     echo "------------------------------------------------------"
     echo " 7. 更新 sing-box 核心"
     echo " 8. 检查脚本更新"
-    echo -e " 9. ${RED}彻底卸载 Sing-Box-VRV${NC}"
+    echo " 9. 彻底卸载 Sing-Box-VRV"
     echo " 0. 退出脚本"
     echo "======================================================"
     read -p "请输入你的选项: " choice
