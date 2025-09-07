@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.0
+# REVISION:     3.1
 #================================================================================
 
-SCRIPT_VERSION="3.0"
+SCRIPT_VERSION="3.1"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -42,7 +42,7 @@ install_singbox_core() {
 internal_validate_domain() {
     local domain="$1"
     echo -n "正在快速验证 ${domain} ... "
-    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
         echo -e "${GREEN}成功！${NC}"; return 0
     else
         echo -e "${RED}失败！${NC}"; return 1
@@ -55,12 +55,16 @@ generate_config() {
     while true; do
         read -p "请输入 Reality 域名 [默认 www.microsoft.com]: " handshake_server
         handshake_server=${handshake_server:-www.microsoft.com}
-        internal_validate_domain "$handshake_server" && break
-        read -p "是否 [R]重新输入, [F]强制使用, 或 [A]中止? (R/F/A): " choice
-        case "${choice,,}" in
-            f|force) echo "警告：强制使用未通过验证的域名。"; break ;;
-            a|abort) echo -e "${RED}安装已中止。${NC}"; return 1 ;;
-        esac
+        if internal_validate_domain "$handshake_server"; then
+            break
+        else
+            echo -e "${RED}该域名不可用。请选择一个能稳定访问的大厂域名。${NC}"
+            read -p "是否 [R]重新输入 或 [Q]退出脚本? (R/Q): " choice
+            case "${choice,,}" in
+                q|quit) echo -e "${RED}安装已中止。${NC}"; return 1 ;;
+                *) continue ;;
+            esac
+        fi
     done
 
     echo "正在生成密钥与 ID..."
@@ -152,12 +156,16 @@ change_reality_domain() {
     while true; do
         read -p "请输入新的 Reality 域名: " new_domain
         [[ -z "$new_domain" ]] && { echo -e "${RED}域名不能为空。${NC}"; continue; }
-        internal_validate_domain "$new_domain" && break
-        read -p "是否 [R]重新输入, [F]强制使用, 或 [A]中止? (R/F/A): " choice
-        case "${choice,,}" in
-            f|force) echo "警告：强制使用未通过验证的域名。"; break ;;
-            a|abort) echo -e "${RED}操作已中止。${NC}"; return ;;
-        esac
+        if internal_validate_domain "$new_domain"; then
+            break
+        else
+            echo -e "${RED}该域名不可用。请选择一个能稳定访问的大厂域名。${NC}"
+            read -p "是否 [R]重新输入 或 [Q]退出? (R/Q): " choice
+            case "${choice,,}" in
+                q|quit) echo -e "${RED}操作已中止。${NC}"; return ;;
+                *) continue ;;
+            esac
+        fi
     done
 
     echo ">>> 正在更新配置文件..."
