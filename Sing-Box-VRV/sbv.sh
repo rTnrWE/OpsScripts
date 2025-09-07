@@ -2,12 +2,12 @@
 
 #================================================================================
 # FILE:         sbv.sh
-# USAGE:        bash <(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh)
+# USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     2.9
+# REVISION:     3.0
 #================================================================================
 
-SCRIPT_VERSION="2.9"
+SCRIPT_VERSION="3.0"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -19,9 +19,9 @@ SINGBOX_BINARY=""
 check_root() { [[ "$EUID" -ne 0 ]] && { echo -e "${RED}错误：此脚本必须以 root 权限运行。${NC}"; exit 1; }; }
 
 check_dependencies() {
-    for cmd in curl jq openssl; do
+    for cmd in curl jq openssl wget; do
         if ! command -v $cmd &> /dev/null; then
-            echo "依赖 '$cmd' 未安装，正在尝试..."
+            echo "依赖 '$cmd' 未安装，正在尝试自动安装..."
             if command -v apt-get &> /dev/null; then apt-get update >/dev/null && apt-get install -y $cmd
             elif command -v yum &> /dev/null; then yum install -y $cmd
             elif command -v dnf &> /dev/null; then dnf install -y $cmd
@@ -42,7 +42,7 @@ install_singbox_core() {
 internal_validate_domain() {
     local domain="$1"
     echo -n "正在快速验证 ${domain} ... "
-    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
         echo -e "${GREEN}成功！${NC}"; return 0
     else
         echo -e "${RED}失败！${NC}"; return 1
@@ -113,8 +113,8 @@ show_summary() {
     local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
 
     echo -e "\n=================================================="
-    echo -e "${GREEN}       Sing-Box-VRV (VLESS+Reality) 配置       ${NC}"
-    echo -e "=================================================="
+    echo "       Sing-Box-VRV (VLESS+Reality) 配置       "
+    echo "=================================================="
     printf "  %-22s: %s\n" "服务端配置文件" "$CONFIG_PATH"
     echo "--------------------------------------------------"
     echo -e "${GREEN}VLESS 导入链接:${NC}"
@@ -163,7 +163,6 @@ change_reality_domain() {
     echo ">>> 正在更新配置文件..."
     jq --arg domain "$new_domain" '.inbounds[0].tls.server_name = $domain | .inbounds[0].tls.reality.handshake.server = $domain' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
     if [[ $? -ne 0 ]]; then echo -e "${RED}错误：更新配置文件失败！${NC}"; return; fi
-
     sed -i "s/^HANDSHAKE_SERVER=.*/HANDSHAKE_SERVER=${new_domain}/" "$INFO_PATH"
     echo -e "${GREEN}配置文件已更新。${NC}"
     
@@ -257,9 +256,9 @@ validate_reality_domain() {
 main_menu() {
     clear
     echo "======================================================"
-    echo -e "${GREEN}      Sing-Box-VRV 管理平台 v${SCRIPT_VERSION}      ${NC}"
+    echo "      Sing-Box-VRV v${SCRIPT_VERSION}      "
     echo "======================================================"
-    if [[ ! -f "$CONFIG_PATH" ]]; then echo -e " 1. ${GREEN}安装 Sing-Box-VRV${NC}"; else echo -e " 1. 重新安装 Sing-Box-VRV"; fi
+    if [[ ! -f "$CONFIG_PATH" ]]; then echo -e " 1. ${GREEN}安装 Sing-Box-VRV${NC}"; else echo " 1. 重新安装 Sing-Box-VRV"; fi
     echo " 2. 查看配置信息"
     echo " 3. 更换 Reality 域名"
     echo " 4. 管理 sing-box 服务"
