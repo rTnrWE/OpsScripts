@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.9
+# REVISION:     4.0
 #================================================================================
 
-SCRIPT_VERSION="3.9"
+SCRIPT_VERSION="4.0"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -334,13 +334,24 @@ update_script() {
     echo ">>> 正在检查脚本更新..."
     local temp_script=$(mktemp)
     if ! curl -fsSL "$SCRIPT_URL" -o "$temp_script"; then echo -e "${RED}下载新版本脚本失败。${NC}"; rm "$temp_script"; return; fi
-    if ! diff -q "$INSTALL_PATH" "$temp_script" &>/dev/null; then
-        read -p "$(echo -e ${GREEN}"发现新版本，是否更新? (y/N): "${NC})" confirm
+    
+    local new_version=$(grep -oP 'SCRIPT_VERSION="\K[^"]+' "$temp_script")
+    if [[ -z "$new_version" ]]; then
+        echo -e "${RED}无法在新脚本中检测到版本号。为安全起见，已中止更新。${NC}"; rm "$temp_script"; return
+    fi
+    
+    if [[ "$SCRIPT_VERSION" != "$new_version" ]]; then
+        read -p "$(echo -e ${GREEN}"发现新版本 v${new_version}，是否更新? (y/N): "${NC})" confirm
         if [[ "${confirm,,}" != "n" ]]; then
-            mv "$temp_script" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"; echo -e "${GREEN}脚本已更新！正在重新加载...${NC}"; exec bash "$INSTALL_PATH"
+            mv "$temp_script" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"
+            echo -e "${GREEN}脚本已成功更新至 v${new_version}！${NC}"
+            echo "请重新运行 './sbv.sh' 来使用新版本。"
+            exit 0
+        else
+            rm "$temp_script"
         fi
     else
-        echo -e "${GREEN}脚本已是最新版本。${NC}"; rm "$temp_script"
+        echo -e "${GREEN}脚本已是最新版本 (v${SCRIPT_VERSION})。${NC}"; rm "$temp_script"
     fi
 }
 
