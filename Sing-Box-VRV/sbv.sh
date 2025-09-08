@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.5.2
+# REVISION:     1.5.3
 #================================================================================
 
-SCRIPT_VERSION="1.5.2"
+SCRIPT_VERSION="1.5.3"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -221,8 +221,8 @@ install_vrv() {
         case "$reinstall_choice" in
             1)
                 echo "--- 正在使用旧配置重装核心 ---"
-                install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-                start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                install_singbox_core || return 1
+                start_service || return 1
                 show_summary
                 echo -e "\n${GREEN}--- Sing-Box-VRV 核心重装成功 ---${NC}"
                 ;;
@@ -230,9 +230,9 @@ install_vrv() {
                 echo "--- 开始全新安装 (将覆盖旧数据) ---"
                 rm -rf /etc/sing-box
                 enable_tfo
-                install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-                generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-                start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                install_singbox_core || return 1
+                generate_config || return 1
+                start_service || return 1
                 show_summary
                 echo -e "\n${GREEN}--- Sing-Box-VRV 全新安装成功 ---${NC}"
                 ;;
@@ -242,9 +242,9 @@ install_vrv() {
     else
         echo "--- 开始首次安装 Sing-Box-VRV ---"
         enable_tfo
-        install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-        generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-        start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+        install_singbox_core || return 1
+        generate_config || return 1
+        start_service || return 1
         show_summary
         echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
     fi
@@ -252,6 +252,7 @@ install_vrv() {
     echo -e "\n${GREEN}安装/重装流程已完成！${NC}"
     echo "您可以随时通过再次运行以下命令来管理平台："
     echo -e "${GREEN}./sbv.sh${NC}"
+    return 0
 }
 
 change_reality_domain() {
@@ -427,23 +428,45 @@ main_menu() {
         echo "======================================================"
         read -p "请输入你的选项: " choice
 
-        if [[ ! -f "$CONFIG_PATH" && ",2,3,4,7," == *",${choice},"* ]]; then
-            echo -e "\n${RED}错误：请先安装 Sing-Box-VRV (选项1)。${NC}"
-        else
-            case "${choice,,}" in
-                1) install_vrv; exit 0 ;;
-                2) show_summary ;;
-                3) change_reality_domain ;;
-                4) manage_service ;;
-                5) validate_reality_domain ;;
-                7) update_singbox_core ;;
-                8) if [[ -f "$INSTALL_PATH" ]]; then update_script; else echo -e "${RED}脚本尚未安装，无法更新。${NC}"; fi ;;
-                9) uninstall_vrv; exit 0 ;;
-                0) exit 0 ;;
-                *) echo -e "${RED}无效选项。${NC}" ;;
-            esac
-        fi
-        read -n 1 -s -r -p "按任意键返回主菜单..."
+        case "${choice,,}" in
+            1)
+                install_vrv
+                if [[ $? -eq 0 ]]; then exit 0; else read -n 1 -s -r -p "安装失败，按任意键返回主菜单..."; fi
+                ;;
+            2)
+                if [[ -f "$CONFIG_PATH" ]]; then show_summary; else echo -e "\n${RED}错误：请先安装 Sing-Box-VRV (选项1)。${NC}"; fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            3)
+                if [[ -f "$CONFIG_PATH" ]]; then change_reality_domain; else echo -e "\n${RED}错误：请先安装 Sing-Box-VRV (选项1)。${NC}"; fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            4)
+                if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装 Sing-Box-VRV (选项1)。${NC}"; read -n 1 -s -r -p "按任意键返回主菜单..."; fi
+                ;;
+            5)
+                validate_reality_domain
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            7)
+                if [[ -f "$CONFIG_PATH" ]]; then update_singbox_core; else echo -e "\n${RED}错误：请先安装 Sing-Box-VRV (选项1)。${NC}"; fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            8)
+                if [[ -f "$INSTALL_PATH" ]]; then update_script; else echo -e "\n${RED}脚本尚未安装，无法更新。${NC}"; fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            9)
+                uninstall_vrv; exit 0
+                ;;
+            0)
+                exit 0
+                ;;
+            *)
+                echo -e "\n${RED}无效选项。${NC}"
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+        esac
     done
 }
 
