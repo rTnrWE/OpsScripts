@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.5.1
+# REVISION:     1.5.2
 #================================================================================
 
-SCRIPT_VERSION="1.5.1"
+SCRIPT_VERSION="1.5.2"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -408,42 +408,43 @@ validate_reality_domain() {
 }
 
 main_menu() {
-    clear
-    echo "======================================================"
-    echo "      Sing-Box-VRV v${SCRIPT_VERSION}      "
-    echo "  仅支持安装 sing-box (VLESS+Reality+Vision)  "
-    echo "======================================================"
-    if [[ ! -f "$CONFIG_PATH" ]]; then echo -e " 1. ${GREEN}安装 Sing-Box-VRV${NC}"; else echo -e " 1. ${GREEN}重新安装 Sing-Box-VRV${NC}"; fi
-    echo " 2. 查看配置信息"
-    echo " 3. 更换 Reality 域名"
-    echo " 4. 管理 sing-box 服务"
-    echo " 5. 验证 Reality 域名"
-    echo "------------------------------------------------------"
-    echo " 7. 更新 sing-box 核心"
-    echo " 8. 检查脚本更新"
-    echo " 9. 彻底卸载 Sing-Box-VRV"
-    echo " 0. 退出脚本"
-    echo "======================================================"
-    read -p "请输入你的选项: " choice
+    while true; do
+        clear
+        echo "======================================================"
+        echo "      Sing-Box-VRV v${SCRIPT_VERSION}      "
+        echo "  仅支持安装 sing-box (VLESS+Reality+Vision)  "
+        echo "======================================================"
+        if [[ ! -f "$CONFIG_PATH" ]]; then echo -e " 1. ${GREEN}安装 Sing-Box-VRV${NC}"; else echo -e " 1. ${GREEN}重新安装 Sing-Box-VRV${NC}"; fi
+        echo " 2. 查看配置信息"
+        echo " 3. 更换 Reality 域名"
+        echo " 4. 管理 sing-box 服务"
+        echo " 5. 验证 Reality 域名"
+        echo "------------------------------------------------------"
+        echo " 7. 更新 sing-box 核心"
+        echo " 8. 检查脚本更新"
+        echo " 9. 彻底卸载 Sing-Box-VRV"
+        echo " 0. 退出脚本"
+        echo "======================================================"
+        read -p "请输入你的选项: " choice
 
-    if [[ ! -f "$CONFIG_PATH" && ",2,3,4,7," == *",${choice},"* ]]; then
-        echo -e "\n${RED}错误：请先安装 Sing-Box-VRV (选项1)。${NC}"
-    else
-        case "${choice,,}" in
-            1) install_vrv; exit 0 ;;
-            2) show_summary ;;
-            3) change_reality_domain ;;
-            4) manage_service ;;
-            5) validate_reality_domain ;;
-            7) update_singbox_core ;;
-            8) if [[ -f "$INSTALL_PATH" ]]; then update_script; else echo -e "${RED}脚本尚未安装，无法更新。${NC}"; fi ;;
-            9) uninstall_vrv; exit 0 ;;
-            0) exit 0 ;;
-            *) echo -e "${RED}无效选项。${NC}" ;;
-        esac
-    fi
-    read -n 1 -s -r -p "按任意键返回主菜单..."
-    main_menu
+        if [[ ! -f "$CONFIG_PATH" && ",2,3,4,7," == *",${choice},"* ]]; then
+            echo -e "\n${RED}错误：请先安装 Sing-Box-VRV (选项1)。${NC}"
+        else
+            case "${choice,,}" in
+                1) install_vrv; exit 0 ;;
+                2) show_summary ;;
+                3) change_reality_domain ;;
+                4) manage_service ;;
+                5) validate_reality_domain ;;
+                7) update_singbox_core ;;
+                8) if [[ -f "$INSTALL_PATH" ]]; then update_script; else echo -e "${RED}脚本尚未安装，无法更新。${NC}"; fi ;;
+                9) uninstall_vrv; exit 0 ;;
+                0) exit 0 ;;
+                *) echo -e "${RED}无效选项。${NC}" ;;
+            esac
+        fi
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+    done
 }
 
 # --- Script Entry Point ---
