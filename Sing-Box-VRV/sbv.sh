@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.6.2.1
+# REVISION:     1.6.2.2
 #================================================================================
 
-SCRIPT_VERSION="1.6.2.1"
+SCRIPT_VERSION="1.6.2.2"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -189,46 +189,6 @@ show_summary() {
     if [[ ! -f "$INFO_PATH" ]]; then echo -e "${RED}错误：未找到配置信息文件。${NC}"; return; fi
     source "$INFO_PATH"
     
-    if [[ "$CO_EXIST_MODE" == "true" ]]; then
-        echo -e "\n=================================================="
-        echo "    Sing-Box-(VLESS+Reality+Vision) 配置    "
-        echo -e "=================================================="
-        printf "  %-22s: ${GREEN}%s${NC}\n" "服务端配置文件" "$CONFIG_PATH"
-        show_client_config_format
-        echo -e "\n${RED}===================== 重要操作提醒 =====================${NC}"
-        echo -e "${RED}您已选择“网站共存”模式，sing-box 正在监听 ${INTERNAL_PORT} 端口。${NC}"
-        echo -e "${RED}您必须手动配置网站服务器 (如 Nginx) 进行反向代理才能使用。${NC}"
-        echo -e "${RED}以下是一个 Nginx 配置示例 (请添加到 nginx.conf 的 http 块之外):${NC}"
-        echo "--------------------------------------------------"
-        echo "stream {"
-        echo "    map \$ssl_preread_server_name \$backend_name {"
-        echo "        your_domain.com web; # <-- 将 your_domain.com 替换为您的网站域名"
-        echo "        ${HANDSHAKE_SERVER} singbox;"
-        echo "        default web;"
-        echo "    }"
-        echo ""
-        echo "    upstream web {"
-        echo "        server 127.0.0.1:80; # 假设您的网站监听80端口"
-        echo "    }"
-        echo ""
-        echo "    upstream singbox {"
-        echo "        server 127.0.0.1:${INTERNAL_PORT};"
-        echo "    }"
-        echo ""
-        echo "    server {"
-        echo "        listen 443 reuseport;"
-        echo "        listen [::]:443 reuseport;"
-        echo "        proxy_pass \$backend_name;"
-        echo "        ssl_preread on;"
-        echo "    }"
-        echo "}"
-        echo "--------------------------------------------------"
-        echo -e "${RED}配置完成后，请运行 'nginx -t' 检查语法并 'systemctl restart nginx' 重启生效。${NC}"
-        echo -e "${RED}客户端配置中的 'port' 依然使用 443。${NC}"
-        echo -e "${RED}======================================================${NC}"
-        return
-    fi
-
     local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
     local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
 
@@ -242,11 +202,41 @@ show_summary() {
     
     show_client_config_format
 
-    echo "--------------------------------------------------"
-    echo "请在您自己的电脑上运行以下命令, 测试您本地到"
-    echo "Reality 域名的真实网络延迟 (越低越好):"
-    echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
-    echo "--------------------------------------------------"
+    if [[ "$CO_EXIST_MODE" == "true" ]]; then
+        echo -e "\n${RED}===================== 重要操作提醒 =====================${NC}"
+        echo -e "${RED}您已选择“网站共存”模式，sing-box 正在监听 127.0.0.1:${INTERNAL_PORT}。${NC}"
+        echo -e "${RED}您必须手动配置网站服务器 (如 Nginx) 进行反向代理才能使用。${NC}"
+        echo -e "${RED}请将以下 'stream' 配置块，添加到您的 Nginx 主配置文件中 (例如 /etc/nginx/nginx.conf)，注意是放在 http {} 块的外部。${NC}"
+        echo "--------------------------------------------------"
+        echo "stream {"
+        echo "    map \$ssl_preread_server_name \$backend_address {"
+        echo "        ${HANDSHAKE_SERVER} 127.0.0.1:${INTERNAL_PORT};"
+        echo ""
+        echo "        # 将 your_domain.com 替换为您的网站域名"
+        echo "        your_domain.com 127.0.0.1:80;"
+        echo ""
+        echo "        # 默认回落到网站"
+        echo "        default 127.0.0.1:80;"
+        echo "    }"
+        echo ""
+        echo "    server {"
+        echo "        listen 443 reuseport;"
+        echo "        listen [::]:443 reuseport;"
+        echo "        proxy_pass \$backend_address;"
+        echo "        ssl_preread on;"
+        echo "    }"
+        echo "}"
+        echo "--------------------------------------------------"
+        echo -e "${RED}配置完成后，请运行 'nginx -t' 检查语法并 'systemctl restart nginx' 重启生效。${NC}"
+        echo -e "${RED}客户端配置中的 'port' 依然使用 443。${NC}"
+        echo -e "${RED}======================================================${NC}"
+    else
+        echo "--------------------------------------------------"
+        echo "请在您自己的电脑上运行以下命令, 测试您本地到"
+        echo "Reality 域名的真实网络延迟 (越低越好):"
+        echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
+        echo "--------------------------------------------------"
+    fi
 }
 
 install_vrv() {
