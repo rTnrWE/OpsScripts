@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.6.2
+# REVISION:     1.6.2.1
 #================================================================================
 
-SCRIPT_VERSION="1.6.2"
+SCRIPT_VERSION="1.6.2.1"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -49,7 +49,7 @@ install_singbox_core() {
 internal_validate_domain() {
     local domain="$1"
     echo -n "正在从 VPS 快速验证 ${domain} 的技术可用性... "
-    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
         echo -e "${GREEN}成功！${NC}"; return 0
     else
         echo -e "${RED}失败！${NC}"; return 1
@@ -75,13 +75,13 @@ generate_config() {
     local handshake_server
     while true; do
         echo -en "${GREEN}"
-        read -p "请输入 Reality 域名 [默认 www.microsoft.com]: " handshake_server
+        read -p "请输入 Reality 域名 [默认 www.bing.com]: " handshake_server
         echo -en "${NC}"
-        handshake_server=${handshake_server:-www.microsoft.com}
+        handshake_server=${handshake_server:-www.bing.com}
         if internal_validate_domain "$handshake_server"; then
             break
         else
-            echo -e "${RED}该域名技术上不可用。请选择一个能稳定访问的大厂域名。${NC}"
+            echo -e "${RED}该域名技术上不可用。请选择另外一个。${NC}"
             read -p "是否 [R]重新输入 或 [Q]退出脚本? (R/Q): " choice
             case "${choice,,}" in
                 q|quit) echo -e "${RED}安装已中止。${NC}"; return 1 ;;
@@ -189,20 +189,12 @@ show_summary() {
     if [[ ! -f "$INFO_PATH" ]]; then echo -e "${RED}错误：未找到配置信息文件。${NC}"; return; fi
     source "$INFO_PATH"
     
-    local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
-    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
-
-    echo -e "\n=================================================="
-    echo "    Sing-Box-(VLESS+Reality+Vision) 配置    "
-    echo "=================================================="
-    printf "  %-22s: ${GREEN}%s${NC}\n" "服务端配置文件" "$CONFIG_PATH"
-    echo "--------------------------------------------------"
-    echo -e "${GREEN}VLESS 导入链接:${NC}"
-    echo "$vless_link"
-    
-    show_client_config_format
-
     if [[ "$CO_EXIST_MODE" == "true" ]]; then
+        echo -e "\n=================================================="
+        echo "    Sing-Box-(VLESS+Reality+Vision) 配置    "
+        echo -e "=================================================="
+        printf "  %-22s: ${GREEN}%s${NC}\n" "服务端配置文件" "$CONFIG_PATH"
+        show_client_config_format
         echo -e "\n${RED}===================== 重要操作提醒 =====================${NC}"
         echo -e "${RED}您已选择“网站共存”模式，sing-box 正在监听 ${INTERNAL_PORT} 端口。${NC}"
         echo -e "${RED}您必须手动配置网站服务器 (如 Nginx) 进行反向代理才能使用。${NC}"
@@ -234,13 +226,27 @@ show_summary() {
         echo -e "${RED}配置完成后，请运行 'nginx -t' 检查语法并 'systemctl restart nginx' 重启生效。${NC}"
         echo -e "${RED}客户端配置中的 'port' 依然使用 443。${NC}"
         echo -e "${RED}======================================================${NC}"
-    else
-        echo "--------------------------------------------------"
-        echo "请在您自己的电脑上运行以下命令, 测试您本地到"
-        echo "Reality 域名的真实网络延迟 (越低越好):"
-        echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
-        echo "--------------------------------------------------"
+        return
     fi
+
+    local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
+    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
+
+    echo -e "\n=================================================="
+    echo "    Sing-Box-(VLESS+Reality+Vision) 配置    "
+    echo "=================================================="
+    printf "  %-22s: ${GREEN}%s${NC}\n" "服务端配置文件" "$CONFIG_PATH"
+    echo "--------------------------------------------------"
+    echo -e "${GREEN}VLESS 导入链接:${NC}"
+    echo "$vless_link"
+    
+    show_client_config_format
+
+    echo "--------------------------------------------------"
+    echo "请在您自己的电脑上运行以下命令, 测试您本地到"
+    echo "Reality 域名的真实网络延迟 (越低越好):"
+    echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
+    echo "--------------------------------------------------"
 }
 
 install_vrv() {
@@ -281,12 +287,7 @@ install_vrv() {
     fi
     
     echo -e "\n${GREEN}安装/重装流程已完成！${NC}"
-    source "$INFO_PATH"
-    if [[ "$CO_EXIST_MODE" == "true" ]]; then
-        echo "请完成您的网站服务器反代配置后，通过以下命令管理平台："
-    else
-        echo "您可以随时通过再次运行以下命令来管理平台："
-    fi
+    echo "您可以随时通过再次运行以下命令来管理平台："
     echo -e "${GREEN}./sbv.sh${NC}"
 }
 
@@ -300,7 +301,7 @@ change_reality_domain() {
         if internal_validate_domain "$new_domain"; then
             break
         else
-            echo -e "${RED}该域名技术上不可用。请选择一个能稳定访问的大厂域名。${NC}"
+            echo -e "${RED}该域名技术上不可用。请选择另外一个。${NC}"
             read -p "是否 [R]重新输入 或 [Q]退出? (R/Q): " choice
             case "${choice,,}" in
                 q|quit) echo -e "${RED}操作已中止。${NC}"; return ;;
