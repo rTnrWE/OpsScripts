@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.6
+# REVISION:     3.7
 #================================================================================
 
-SCRIPT_VERSION="3.6"
+SCRIPT_VERSION="3.7"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -19,16 +19,29 @@ SINGBOX_BINARY=""
 check_root() { [[ "$EUID" -ne 0 ]] && { echo -e "${RED}错误：此脚本必须以 root 权限运行。${NC}"; exit 1; }; }
 
 check_dependencies() {
-    for cmd in curl jq openssl wget; do
+    for cmd in curl jq openssl wget ping; do
         if ! command -v $cmd &> /dev/null; then
             echo "依赖 '$cmd' 未安装，正在尝试自动安装..."
-            if command -v apt-get &> /dev/null; then apt-get update >/dev/null && apt-get install -y $cmd
-            elif command -v yum &> /dev/null; then yum install -y $cmd
-            elif command -v dnf &> /dev/null; then dnf install -y $cmd
+            if command -v apt-get &> /dev/null; then apt-get update >/dev/null && apt-get install -y $cmd dnsutils
+            elif command -v yum &> /dev/null; then yum install -y $cmd bind-utils
+            elif command -v dnf &> /dev/null; then dnf install -y $cmd bind-utils
             else echo -e "${RED}无法确定包管理器。请手动安装 '$cmd'。${NC}"; exit 1; fi
             if ! command -v $cmd &> /dev/null; then echo -e "${RED}错误：'$cmd' 自动安装失败。${NC}"; exit 1; fi
         fi
     done
+}
+
+enable_tfo() {
+    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
+        return 0
+    fi
+    echo "net.ipv4.tcp_fastopen = 3" > /etc/sysctl.d/99-tcp-fastopen.conf
+    sysctl -p /etc/sysctl.d/99-tcp-fastopen.conf >/dev/null 2>&1
+    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
+        echo -e "${GREEN}TCP Fast Open (TFO) 已成功开启。${NC}"
+    else
+        echo "警告：无法自动开启 TFO，可能会影响性能。"
+    fi
 }
 
 install_singbox_core() {
@@ -43,9 +56,16 @@ internal_validate_domain() {
     local domain="$1"
     echo -n "正在快速验证 ${domain} ... "
     if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
-        echo -e "${GREEN}成功！${NC}"; return 0
+        echo -e "${GREEN}可用性: 成功！${NC}"
+        local ping_result=$(ping -c 3 -W 2 "$domain" | tail -1 | awk -F '/' '{print $5}')
+        if [[ -n "$ping_result" ]]; then
+            echo -e "${GREEN}网络质量 (延迟): ${ping_result} ms${NC}"
+        else
+            echo "网络质量 (延迟): 未知 (Ping失败)"
+        fi
+        return 0
     else
-        echo -e "${RED}失败！${NC}"; return 1
+        echo -e "${RED}可用性: 失败！${NC}"; return 1
     fi
 }
 
@@ -77,9 +97,53 @@ generate_config() {
     local short_id=$(openssl rand -hex 8)
     mkdir -p /etc/sing-box
 
-    tee "$CONFIG_PATH" > /dev/null <<EOF
-{ "log": { "disabled": true }, "inbounds": [ { "type": "vless", "tag": "vless-in", "listen": "::", "listen_port": 443, "sniff": true, "sniff_override_destination": true, "users": [ { "uuid": "${uuid}", "flow": "xtls-rprx-vision" } ], "tls": { "enabled": true, "server_name": "${handshake_server}", "reality": { "enabled": true, "handshake": { "server": "${handshake_server}", "server_port": 443 }, "private_key": "${private_key}", "short_id": [ "${short_id}" ] } } } ], "outbounds": [ { "type": "direct", "tag": "direct" } ] }
-EOF
+    jq -n \
+      --arg uuid "$uuid" \
+      --arg server_name "$handshake_server" \
+      --arg private_key "$private_key" \
+      --arg short_id "$short_id" \
+      '{
+        "log": { "disabled": true },
+        "inbounds": [
+          {
+            "type": "vless",
+            "tag": "vless-in",
+            "listen": "::",
+            "listen_port": 443,
+            "sniff": true,
+            "sniff_override_destination": true,
+            "tcp_fast_open": true,
+            "users": [
+              {
+                "uuid": $uuid,
+                "flow": "xtls-rprx-vision"
+              }
+            ],
+            "tls": {
+              "enabled": true,
+              "server_name": $server_name,
+              "reality": {
+                "enabled": true,
+                "handshake": {
+                  "server": $server_name,
+                  "server_port": 443
+                },
+                "private_key": $private_key,
+                "short_id": ["", $short_id]
+              }
+            }
+          }
+        ],
+        "outbounds": [
+          {
+            "type": "direct",
+            "tag": "direct",
+            "tcp_fast_open": true,
+            "domain_strategy": "ipv4_first"
+          }
+        ]
+      }' > "$CONFIG_PATH"
+
     tee "$INFO_PATH" > /dev/null <<EOF
 UUID=${uuid}
 PUBLIC_KEY=${public_key}
@@ -142,6 +206,7 @@ install_vrv() {
         case "$reinstall_choice" in
             1)
                 echo "--- 正在使用旧配置重装核心 ---"
+                enable_tfo
                 install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
                 start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
                 show_summary
@@ -150,6 +215,7 @@ install_vrv() {
             2)
                 echo "--- 开始全新安装 (将覆盖旧数据) ---"
                 rm -rf /etc/sing-box
+                enable_tfo
                 install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
                 generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
                 start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
@@ -162,6 +228,7 @@ install_vrv() {
     else
         echo "--- 开始首次安装 Sing-Box-VRV ---"
         install_script
+        enable_tfo
         install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
         generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
         start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
