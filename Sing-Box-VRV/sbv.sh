@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.8
+# REVISION:     3.9
 #================================================================================
 
-SCRIPT_VERSION="3.8"
+SCRIPT_VERSION="3.9"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -48,18 +48,16 @@ install_singbox_core() {
 
 internal_validate_domain() {
     local domain="$1"
-    echo -n "正在快速验证 ${domain} ... "
+    echo -n "正在从 VPS 快速验证 ${domain} 的技术可用性... "
     if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
-        echo -e "${GREEN}可用性: 成功！${NC}"
+        echo -e "${GREEN}成功！${NC}"
         local ping_result=$(ping -c 3 -W 2 "$domain" | tail -1 | awk -F '/' '{print $5}')
         if [[ -n "$ping_result" ]]; then
-            echo -e "${GREEN}网络质量 (延迟): ${ping_result} ms${NC}"
-        else
-            echo "网络质量 (延迟): 未知 (Ping失败)"
+            echo -e "从 VPS 到此域名的延迟约为: ${GREEN}${ping_result} ms${NC}"
         fi
         return 0
     else
-        echo -e "${RED}可用性: 失败！${NC}"; return 1
+        echo -e "${RED}失败！${NC}"; return 1
     fi
 }
 
@@ -74,7 +72,7 @@ generate_config() {
         if internal_validate_domain "$handshake_server"; then
             break
         else
-            echo -e "${RED}该域名不可用。请选择一个能稳定访问的大厂域名。${NC}"
+            echo -e "${RED}该域名技术上不可用。请选择一个能稳定访问的大厂域名。${NC}"
             read -p "是否 [R]重新输入 或 [Q]退出脚本? (R/Q): " choice
             case "${choice,,}" in
                 q|quit) echo -e "${RED}安装已中止。${NC}"; return 1 ;;
@@ -232,7 +230,7 @@ install_vrv() {
     
     echo -e "\n${GREEN}安装/重装流程已完成！${NC}"
     echo "您可以随时通过再次运行以下命令来管理平台："
-    echo -e "  ${GREEN}./sbv.sh${NC}"
+    echo -e "${GREEN}./sbv.sh${NC}"
 }
 
 change_reality_domain() {
@@ -245,7 +243,7 @@ change_reality_domain() {
         if internal_validate_domain "$new_domain"; then
             break
         else
-            echo -e "${RED}该域名不可用。请选择一个能稳定访问的大厂域名。${NC}"
+            echo -e "${RED}该域名技术上不可用。请选择一个能稳定访问的大厂域名。${NC}"
             read -p "是否 [R]重新输入 或 [Q]退出? (R/Q): " choice
             case "${choice,,}" in
                 q|quit) echo -e "${RED}操作已中止。${NC}"; return ;;
@@ -305,15 +303,24 @@ manage_service() {
 }
 
 uninstall_vrv() {
-    read -p "$(echo -e ${RED}"警告：此操作将彻底移除整个 Sing-Box-VRV 平台。确认卸载? [Y/n]: "${NC})" confirm
-    if [[ "${confirm,,}" == "n" ]]; then
-        echo "操作已取消。"; return;
+    read -p "$(echo -e ${RED}"警告：此操作将彻底移除整个 Sing-Box-VRV 平台。要保留配置文件吗? [y/N]: "${NC})" confirm_keep
+    local keep_config=false
+    if [[ "${confirm_keep,,}" == "y" ]]; then
+        keep_config=true
     fi
+    
     systemctl stop sing-box &>/dev/null; systemctl disable sing-box &>/dev/null
-    local bin_path=$(command -v sing-box); rm -rf /etc/sing-box /etc/systemd/system/sing-box.service
+    local bin_path=$(command -v sing-box)
+    if [[ "$keep_config" == false ]]; then
+        echo "正在删除所有文件..."
+        rm -rf /etc/sing-box
+    else
+        echo "正在删除核心组件 (保留配置文件)..."
+    fi
+    rm -f /etc/systemd/system/sing-box.service
     if [[ -n "$bin_path" ]]; then rm -f "$bin_path"; fi
     systemctl daemon-reload; rm -f "$INSTALL_PATH"
-    echo -e "${GREEN}Sing-Box-VRV 已被彻底移除。${NC}"
+    echo -e "${GREEN}Sing-Box-VRV 已被移除。${NC}"
 }
 
 install_script() {
@@ -342,14 +349,25 @@ update_singbox_core() {
 }
 
 validate_reality_domain() {
-    clear; echo "--- Reality 域名稳定性测试 ---";
+    clear; echo "--- Reality 域名质量评估 ---";
     echo -en "${GREEN}"
     read -p "请输入你想测试的目标域名: " domain
     echo -en "${NC}"
     if [[ -z "$domain" ]]; then echo -e "\n${RED}域名不能为空。${NC}"; return; fi
-    echo -e "\n正在进行 5 次 TLSv1.3 连接测试..."; local success=0
-    for i in {1..5}; do echo -n "第 $i/5 次测试: "; if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then echo -e "${GREEN}成功${NC}"; ((success++)); else echo -e "${RED}失败${NC}"; fi; sleep 1; done
-    echo "--------------------------------------------------"; if [[ $success -eq 5 ]]; then echo -e "${GREEN}结论：该域名非常适合。${NC}"; elif [[ $success -gt 0 ]]; then echo "结论：可用但不稳定。"; else echo -e "${RED}结论：不适合。${NC}"; fi;
+    
+    echo ""
+    echo -n "正在从 VPS 测试技术可用性... "
+    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+        echo -e "${GREEN}通过！${NC}"
+        echo "--------------------------------------------------"
+        echo "请在您自己的电脑 (例如 Windows CMD) 上运行以下命令, "
+        echo "来测试您本地到此域名的真实网络延迟。"
+        echo "延迟越低 (如低于100ms), 您的网络体验越好。"
+        echo -e "${GREEN}ping ${domain}${NC}"
+        echo "--------------------------------------------------"
+    else
+        echo -e "${RED}不通过！此域名不可用。${NC}"
+    fi
 }
 
 main_menu() {
