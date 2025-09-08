@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.6.1
+# REVISION:     1.6.2
 #================================================================================
 
-SCRIPT_VERSION="1.6.1"
+SCRIPT_VERSION="1.6.2"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -19,12 +19,12 @@ SINGBOX_BINARY=""
 check_root() { [[ "$EUID" -ne 0 ]] && { echo -e "${RED}错误：此脚本必须以 root 权限运行。${NC}"; exit 1; }; }
 
 check_dependencies() {
-    for cmd in curl jq openssl wget ping; do
+    for cmd in curl jq openssl wget ping ss; do
         if ! command -v $cmd &> /dev/null; then
             echo "依赖 '$cmd' 未安装，正在尝试自动安装..."
-            if command -v apt-get &> /dev/null; then apt-get update >/dev/null && apt-get install -y $cmd dnsutils
-            elif command -v yum &> /dev/null; then yum install -y $cmd bind-utils
-            elif command -v dnf &> /dev/null; then dnf install -y $cmd bind-utils
+            if command -v apt-get &> /dev/null; then apt-get update >/dev/null && apt-get install -y $cmd dnsutils iproute2
+            elif command -v yum &> /dev/null; then yum install -y $cmd bind-utils iproute
+            elif command -v dnf &> /dev/null; then dnf install -y $cmd bind-utils iproute
             else echo -e "${RED}无法确定包管理器。请手动安装 '$cmd'。${NC}"; exit 1; fi
             if ! command -v $cmd &> /dev/null; then echo -e "${RED}错误：'$cmd' 自动安装失败。${NC}"; exit 1; fi
         fi
@@ -49,7 +49,7 @@ install_singbox_core() {
 internal_validate_domain() {
     local domain="$1"
     echo -n "正在从 VPS 快速验证 ${domain} 的技术可用性... "
-    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
         echo -e "${GREEN}成功！${NC}"; return 0
     else
         echo -e "${RED}失败！${NC}"; return 1
@@ -58,6 +58,20 @@ internal_validate_domain() {
 
 generate_config() {
     echo ">>> 正在配置 VLESS + Reality + Vision..."
+    
+    local listen_addr="::"
+    local listen_port=443
+    local co_exist_mode=false
+
+    if ss -tlpn | grep -q ":${listen_port} "; then
+        co_exist_mode=true
+        listen_addr="127.0.0.1"
+        echo "检测到 443 端口已被占用 (可能已有网站在运行)。"
+        echo "脚本将切换到“网站共存”模式，监听本地回环地址。"
+        read -p "请输入 sing-box 用于内部监听的端口 [默认 10443]: " custom_port
+        listen_port=${custom_port:-10443}
+    fi
+
     local handshake_server
     while true; do
         echo -en "${GREEN}"
@@ -85,6 +99,8 @@ generate_config() {
     mkdir -p /etc/sing-box
 
     jq -n \
+      --arg listen_addr "$listen_addr" \
+      --argjson listen_port "$listen_port" \
       --arg uuid "$uuid" \
       --arg server_name "$handshake_server" \
       --arg private_key "$private_key" \
@@ -97,8 +113,8 @@ generate_config() {
           {
             "type": "vless",
             "tag": "vless-in",
-            "listen": "::",
-            "listen_port": 443,
+            "listen": $listen_addr,
+            "listen_port": $listen_port,
             "sniff": true,
             "sniff_override_destination": true,
             "tcp_fast_open": true,
@@ -141,6 +157,8 @@ PUBLIC_KEY=${public_key}
 SHORT_ID=${short_id}
 HANDSHAKE_SERVER=${handshake_server}
 LISTEN_PORT=443
+CO_EXIST_MODE=${co_exist_mode}
+INTERNAL_PORT=${listen_port}
 EOF
     echo -e "${GREEN}配置文件及信息已保存。${NC}"
 }
@@ -148,7 +166,7 @@ EOF
 start_service() {
     echo ">>> 正在启动并设置 sing-box 开机自启..."
     systemctl daemon-reload; systemctl enable sing-box >/dev/null 2>&1; systemctl restart sing-box; sleep 2
-    if systemctl is-active --quiet sing-box; then echo -e "${GREEN}sing-box 服务已成功启动！${NC}"; else echo -e "${RED}错误：sing-box 服务启动失败。请运行'journalctl -u sing-box -n 20 --no-pager'查看日志。${NC}"; return 1; fi
+    if systemctl is-active --quiet sing-box; then echo -e "${GREEN}sing-box 服务已成功启动！${NC}"; else echo -e "${RED}错误：sing-box 服务启动失败。${NC}"; return 1; fi
 }
 
 show_client_config_format() {
@@ -170,6 +188,7 @@ show_client_config_format() {
 show_summary() {
     if [[ ! -f "$INFO_PATH" ]]; then echo -e "${RED}错误：未找到配置信息文件。${NC}"; return; fi
     source "$INFO_PATH"
+    
     local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
     local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
 
@@ -183,11 +202,45 @@ show_summary() {
     
     show_client_config_format
 
-    echo "--------------------------------------------------"
-    echo "请在您自己的电脑上运行以下命令, 测试您本地到"
-    echo "Reality 域名的真实网络延迟 (越低越好):"
-    echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
-    echo "--------------------------------------------------"
+    if [[ "$CO_EXIST_MODE" == "true" ]]; then
+        echo -e "\n${RED}===================== 重要操作提醒 =====================${NC}"
+        echo -e "${RED}您已选择“网站共存”模式，sing-box 正在监听 ${INTERNAL_PORT} 端口。${NC}"
+        echo -e "${RED}您必须手动配置网站服务器 (如 Nginx) 进行反向代理才能使用。${NC}"
+        echo -e "${RED}以下是一个 Nginx 配置示例 (请添加到 nginx.conf 的 http 块之外):${NC}"
+        echo "--------------------------------------------------"
+        echo "stream {"
+        echo "    map \$ssl_preread_server_name \$backend_name {"
+        echo "        your_domain.com web; # <-- 将 your_domain.com 替换为您的网站域名"
+        echo "        ${HANDSHAKE_SERVER} singbox;"
+        echo "        default web;"
+        echo "    }"
+        echo ""
+        echo "    upstream web {"
+        echo "        server 127.0.0.1:80; # 假设您的网站监听80端口"
+        echo "    }"
+        echo ""
+        echo "    upstream singbox {"
+        echo "        server 127.0.0.1:${INTERNAL_PORT};"
+        echo "    }"
+        echo ""
+        echo "    server {"
+        echo "        listen 443 reuseport;"
+        echo "        listen [::]:443 reuseport;"
+        echo "        proxy_pass \$backend_name;"
+        echo "        ssl_preread on;"
+        echo "    }"
+        echo "}"
+        echo "--------------------------------------------------"
+        echo -e "${RED}配置完成后，请运行 'nginx -t' 检查语法并 'systemctl restart nginx' 重启生效。${NC}"
+        echo -e "${RED}客户端配置中的 'port' 依然使用 443。${NC}"
+        echo -e "${RED}======================================================${NC}"
+    else
+        echo "--------------------------------------------------"
+        echo "请在您自己的电脑上运行以下命令, 测试您本地到"
+        echo "Reality 域名的真实网络延迟 (越低越好):"
+        echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
+        echo "--------------------------------------------------"
+    fi
 }
 
 install_vrv() {
@@ -228,9 +281,13 @@ install_vrv() {
     fi
     
     echo -e "\n${GREEN}安装/重装流程已完成！${NC}"
-    echo "您可以随时通过再次运行以下命令来管理平台："
+    source "$INFO_PATH"
+    if [[ "$CO_EXIST_MODE" == "true" ]]; then
+        echo "请完成您的网站服务器反代配置后，通过以下命令管理平台："
+    else
+        echo "您可以随时通过再次运行以下命令来管理平台："
+    fi
     echo -e "${GREEN}./sbv.sh${NC}"
-    return 0
 }
 
 change_reality_domain() {
