@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     3.7
+# REVISION:     3.8
 #================================================================================
 
-SCRIPT_VERSION="3.7"
+SCRIPT_VERSION="3.8"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -32,16 +32,10 @@ check_dependencies() {
 }
 
 enable_tfo() {
-    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
-        return 0
-    fi
+    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then return 0; fi
     echo "net.ipv4.tcp_fastopen = 3" > /etc/sysctl.d/99-tcp-fastopen.conf
     sysctl -p /etc/sysctl.d/99-tcp-fastopen.conf >/dev/null 2>&1
-    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
-        echo -e "${GREEN}TCP Fast Open (TFO) 已成功开启。${NC}"
-    else
-        echo "警告：无法自动开启 TFO，可能会影响性能。"
-    fi
+    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then echo -e "${GREEN}TCP Fast Open (TFO) 已成功开启。${NC}"; else echo "警告：无法自动开启 TFO，可能会影响性能。"; fi
 }
 
 install_singbox_core() {
@@ -139,7 +133,7 @@ generate_config() {
             "type": "direct",
             "tag": "direct",
             "tcp_fast_open": true,
-            "domain_strategy": "ipv4_first"
+            "domain_strategy": "prefer_ipv4"
           }
         ]
       }' > "$CONFIG_PATH"
