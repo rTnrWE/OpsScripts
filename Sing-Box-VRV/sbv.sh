@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     4.9
+# REVISION:     1.5.1
 #================================================================================
 
-SCRIPT_VERSION="4.9"
+SCRIPT_VERSION="1.5.1"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -49,9 +49,8 @@ install_singbox_core() {
 internal_validate_domain() {
     local domain="$1"
     echo -n "正在从 VPS 快速验证 ${domain} 的技术可用性... "
-    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
-        echo -e "${GREEN}成功！${NC}"
-        return 0
+    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+        echo -e "${GREEN}成功！${NC}"; return 0
     else
         echo -e "${RED}失败！${NC}"; return 1
     fi
@@ -412,6 +411,7 @@ main_menu() {
     clear
     echo "======================================================"
     echo "      Sing-Box-VRV v${SCRIPT_VERSION}      "
+    echo "  仅支持安装 sing-box (VLESS+Reality+Vision)  "
     echo "======================================================"
     if [[ ! -f "$CONFIG_PATH" ]]; then echo -e " 1. ${GREEN}安装 Sing-Box-VRV${NC}"; else echo -e " 1. ${GREEN}重新安装 Sing-Box-VRV${NC}"; fi
     echo " 2. 查看配置信息"
@@ -447,8 +447,8 @@ main_menu() {
 }
 
 # --- Script Entry Point ---
-# This script is designed to be run via `wget && chmod && ./sbv.sh`.
-# The main_menu will intelligently handle whether it's a first install or not.
+# The logic is now unified. The script always assumes it should run the main menu.
+# The one-liner command `wget && chmod && ./sbv.sh` handles the initial download.
 check_root
 check_dependencies
 main_menu
