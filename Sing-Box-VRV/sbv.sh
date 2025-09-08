@@ -1,13 +1,13 @@
-#!/bin/bash
+#!/bin.bash
 
 #================================================================================
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     4.3
+# REVISION:     4.5
 #================================================================================
 
-SCRIPT_VERSION="4.3"
+SCRIPT_VERSION="4.5"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -91,6 +91,25 @@ generate_config() {
       --arg private_key "$private_key" \
       --arg short_id "$short_id" \
       '{
+        "log": {
+          "disabled": true
+        },
+        "dns": {
+          "servers": [
+            {
+              "tag": "google",
+              "address": "https://dns.google/dns-query",
+              "detour": "direct"
+            },
+            {
+              "tag": "cloudflare",
+              "address": "https://cloudflare-dns.com/dns-query",
+              "detour": "direct"
+            }
+          ],
+          "strategy": "prefer_ipv4",
+          "disable_cache": false
+        },
         "inbounds": [
           {
             "type": "vless",
@@ -116,29 +135,26 @@ generate_config() {
                   "server_port": 443
                 },
                 "private_key": $private_key,
-                "short_id": ["", $short_id]
+                "short_id": [
+                  "",
+                  $short_id
+                ]
               }
             }
           }
         ],
         "outbounds": [
-          {"type": "direct", "tag": "direct-ipv4", "domain_strategy": "ipv4_only"},
-          {"type": "direct", "tag": "direct-ipv6", "domain_strategy": "ipv6_only"},
-          {"type": "dns", "tag": "dns-out"}
+          {
+            "type": "direct",
+            "tag": "direct"
+          },
+          {
+            "type": "dns",
+            "tag": "dns-out"
+          }
         ],
         "route": {
-          "rules": [
-            {"domain_matcher": "all", "outbound": "direct-ipv4"},
-            {"ip_version": 6, "outbound": "direct-ipv6"}
-          ],
-          "final": "direct-ipv4"
-        },
-        "dns": {
-          "servers": [
-            {"tag": "google", "address": "https://dns.google/dns-query", "detour": "direct-ipv4"},
-            {"tag": "cloudflare", "address": "https://cloudflare-dns.com/dns-query", "detour": "direct-ipv4"}
-          ],
-          "strategy": "ipv4_first"
+          "final": "direct"
         }
       }' > "$CONFIG_PATH"
 
@@ -276,7 +292,7 @@ change_reality_domain() {
 manage_service() {
     disable_logs_and_restart() {
         echo -e "\n>>> 正在关闭日志并恢复服务..."
-        jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+        jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
         systemctl restart sing-box
         echo -e "${GREEN}服务已恢复到无日志模式。${NC}"
     }
@@ -314,16 +330,16 @@ manage_service() {
 }
 
 uninstall_vrv() {
-    read -p "$(echo -e ${RED}"警告：此操作将彻底移除整个 Sing-Box-VRV 平台。要保留配置文件吗? [y/N]: "${NC})" confirm_keep
+    read -p "$(echo -e ${RED}"警告：此操作将彻底移除整个 Sing-Box-VRV。要删除配置文件吗? [Y/n]: "${NC})" confirm_delete
     local keep_config=false
-    if [[ "${confirm_keep,,}" == "y" ]]; then
+    if [[ "${confirm_delete,,}" == "n" ]]; then
         keep_config=true
     fi
     
     systemctl stop sing-box &>/dev/null; systemctl disable sing-box &>/dev/null
     local bin_path=$(command -v sing-box)
     if [[ "$keep_config" == false ]]; then
-        echo "正在删除所有文件..."
+        echo "正在删除所有文件 (包括配置文件)..."
         rm -rf /etc/sing-box
     else
         echo "正在删除核心组件 (保留配置文件)..."
