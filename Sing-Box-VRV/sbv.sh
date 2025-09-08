@@ -431,7 +431,7 @@ main_menu() {
         case "${choice,,}" in
             1)
                 install_vrv
-                # After install/reinstall, the script should exit as per the logic
+                # install_vrv will either return 0 on success/cancelled, or 1 on failure, then exit
                 if [[ $? -eq 0 ]]; then exit 0; else read -n 1 -s -r -p "安装失败，按任意键返回主菜单..."; fi
                 ;;
             2)
