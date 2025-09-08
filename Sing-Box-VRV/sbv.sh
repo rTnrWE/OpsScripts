@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.5.5
+# REVISION:     1.5.6
 #================================================================================
 
-SCRIPT_VERSION="1.5.5"
+SCRIPT_VERSION="1.5.6"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -431,7 +431,7 @@ main_menu() {
         case "${choice,,}" in
             1)
                 install_vrv
-                # install_vrv will either return 0 on success/cancelled, or 1 on failure
+                # After install/reinstall, the script should exit as per the logic
                 if [[ $? -eq 0 ]]; then exit 0; else read -n 1 -s -r -p "安装失败，按任意键返回主菜单..."; fi
                 ;;
             2)
