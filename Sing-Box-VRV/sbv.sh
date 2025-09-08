@@ -1,13 +1,13 @@
-#!/bin.bash
+#!/bin/bash
 
 #================================================================================
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     4.5
+# REVISION:     4.6
 #================================================================================
 
-SCRIPT_VERSION="4.5"
+SCRIPT_VERSION="4.6"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -370,7 +370,9 @@ update_script() {
     if [[ "$SCRIPT_VERSION" != "$new_version" ]]; then
         read -p "$(echo -e ${GREEN}"发现新版本 v${new_version}，是否更新? (y/N): "${NC})" confirm
         if [[ "${confirm,,}" != "n" ]]; then
-            mv "$temp_script" "$INSTALL_PATH"; chmod +x "$INSTALL_PATH"
+            cat "$temp_script" > "$INSTALL_PATH"
+            chmod +x "$INSTALL_PATH"
+            rm "$temp_script"
             echo -e "${GREEN}脚本已成功更新至 v${new_version}！${NC}"
             echo "请重新运行 './sbv.sh' 来使用新版本。"
             exit 0
