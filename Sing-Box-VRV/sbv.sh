@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     4.7
+# REVISION:     4.8
 #================================================================================
 
-SCRIPT_VERSION="4.7"
+SCRIPT_VERSION="4.8"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -191,72 +191,4 @@ show_client_config_format() {
 }
 
 show_summary() {
-    if [[ ! -f "$INFO_PATH" ]]; then echo -e "${RED}错误：未找到配置信息文件。${NC}"; return; fi
-    source "$INFO_PATH"
-    local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
-    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
-
-    echo -e "\n=================================================="
-    echo "    Sing-Box-(VLESS+Reality+Vision) 配置    "
-    echo "=================================================="
-    printf "  %-22s: ${GREEN}%s${NC}\n" "服务端配置文件" "$CONFIG_PATH"
-    echo "--------------------------------------------------"
-    echo -e "${GREEN}VLESS 导入链接:${NC}"
-    echo "$vless_link"
-    
-    show_client_config_format
-
-    echo "--------------------------------------------------"
-    echo "请在您自己的电脑上运行以下命令, 测试您本地到"
-    echo "Reality 域名的真实网络延迟 (越低越好):"
-    echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
-    echo "--------------------------------------------------"
-}
-
-install_vrv() {
-    # This function is now the single entry point for all install/reinstall actions
-    if [[ -f "$CONFIG_PATH" ]]; then
-        # Re-install logic
-        echo "检测到已有安装。"
-        read -p "请选择操作: [1] 沿用旧配置 (仅重装核心) [2] 全新配置 (将删除旧数据): " reinstall_choice
-        case "$reinstall_choice" in
-            1)
-                echo "--- 正在使用旧配置重装核心 ---"
-                install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-                start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-                show_summary
-                echo -e "\n${GREEN}--- Sing-Box-VRV 核心重装成功 ---${NC}"
-                ;;
-            2)
-                echo "--- 开始全新安装 (将覆盖旧数据) ---"
-                rm -rf /etc/sing-box
-                enable_tfo
-                install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-                generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-                start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-                show_summary
-                echo -e "\n${GREEN}--- Sing-Box-VRV 全新安装成功 ---${NC}"
-                ;;
-            *)
-                echo "操作已取消。"; return 0 ;;
-        esac
-    else
-        # First-time install logic
-        echo "--- 开始首次安装 Sing-Box-VRV ---"
-        install_script_if_needed
-        enable_tfo
-        install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-        generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-        start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
-        show_summary
-        echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
-    fi
-    
-    echo -e "\n${GREEN}安装/重装流程已完成！${NC}"
-    echo "您可以随时通过再次运行以下命令来管理平台："
-    echo -e "${GREEN}./sbv.sh${NC}"
-}
-
-change_reality_domain() {
-    local new_domain
-    w
+    if [[ ! -f "$I
