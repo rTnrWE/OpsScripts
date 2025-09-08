@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     4.0
+# REVISION:     4.3
 #================================================================================
 
-SCRIPT_VERSION="4.0"
+SCRIPT_VERSION="4.3"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -51,10 +51,6 @@ internal_validate_domain() {
     echo -n "正在从 VPS 快速验证 ${domain} 的技术可用性... "
     if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
         echo -e "${GREEN}成功！${NC}"
-        local ping_result=$(ping -c 3 -W 2 "$domain" | tail -1 | awk -F '/' '{print $5}')
-        if [[ -n "$ping_result" ]]; then
-            echo -e "从 VPS 到此域名的延迟约为: ${GREEN}${ping_result} ms${NC}"
-        fi
         return 0
     else
         echo -e "${RED}失败！${NC}"; return 1
@@ -95,7 +91,6 @@ generate_config() {
       --arg private_key "$private_key" \
       --arg short_id "$short_id" \
       '{
-        "log": { "disabled": true },
         "inbounds": [
           {
             "type": "vless",
@@ -127,13 +122,24 @@ generate_config() {
           }
         ],
         "outbounds": [
-          {
-            "type": "direct",
-            "tag": "direct",
-            "tcp_fast_open": true,
-            "domain_strategy": "prefer_ipv4"
-          }
-        ]
+          {"type": "direct", "tag": "direct-ipv4", "domain_strategy": "ipv4_only"},
+          {"type": "direct", "tag": "direct-ipv6", "domain_strategy": "ipv6_only"},
+          {"type": "dns", "tag": "dns-out"}
+        ],
+        "route": {
+          "rules": [
+            {"domain_matcher": "all", "outbound": "direct-ipv4"},
+            {"ip_version": 6, "outbound": "direct-ipv6"}
+          ],
+          "final": "direct-ipv4"
+        },
+        "dns": {
+          "servers": [
+            {"tag": "google", "address": "https://dns.google/dns-query", "detour": "direct-ipv4"},
+            {"tag": "cloudflare", "address": "https://cloudflare-dns.com/dns-query", "detour": "direct-ipv4"}
+          ],
+          "strategy": "ipv4_first"
+        }
       }' > "$CONFIG_PATH"
 
     tee "$INFO_PATH" > /dev/null <<EOF
@@ -166,7 +172,6 @@ show_client_config_format() {
     printf "  %-14s: %s\n" "servername" "$HANDSHAKE_SERVER"
     printf "  %-14s: %s\n" "public-key" "$PUBLIC_KEY"
     printf "  %-14s: %s\n" "short-id" "$SHORT_ID"
-    echo "--------------------------------------------------"
 }
 
 show_summary() {
@@ -184,6 +189,12 @@ show_summary() {
     echo "$vless_link"
     
     show_client_config_format
+
+    echo "--------------------------------------------------"
+    echo "请在您自己的电脑上运行以下命令, 测试您本地到"
+    echo "Reality 域名的真实网络延迟 (越低越好):"
+    echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
+    echo "--------------------------------------------------"
 }
 
 install_vrv() {
