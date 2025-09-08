@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.5.9
+# REVISION:     1.5.9.1
 #================================================================================
 
-SCRIPT_VERSION="1.5.9"
+SCRIPT_VERSION="1.5.9.1"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -151,10 +151,7 @@ generate_config() {
             "type": "dns",
             "tag": "dns-out"
           }
-        ],
-        "route": {
-          "final": "direct"
-        }
+        ]
       }' > "$CONFIG_PATH"
 
     tee "$INFO_PATH" > /dev/null <<EOF
