@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.5.9.3
+# REVISION:     1.6.0
 #================================================================================
 
-SCRIPT_VERSION="1.5.9.3"
+SCRIPT_VERSION="1.6.0"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -148,7 +148,7 @@ EOF
 start_service() {
     echo ">>> 正在启动并设置 sing-box 开机自启..."
     systemctl daemon-reload; systemctl enable sing-box >/dev/null 2>&1; systemctl restart sing-box; sleep 2
-    if systemctl is-active --quiet sing-box; then echo -e "${GREEN}sing-box 服务已成功启动！${NC}"; else echo -e "${RED}错误：sing-box 服务启动失败。请运行'journalctl -u sing-box -n 20 --no-pager'查看日志。${NC}"; return 1; fi
+    if systemctl is-active --quiet sing-box; then echo -e "${GREEN}sing-box 服务已成功启动！${NC}"; else echo -e "${RED}错误：sing-box 服务启动失败。${NC}"; return 1; fi
 }
 
 show_client_config_format() {
@@ -199,8 +199,8 @@ install_vrv() {
         case "$reinstall_choice" in
             1)
                 echo "--- 正在使用旧配置重装核心 ---"
-                install_singbox_core || return 1
-                start_service || return 1
+                install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
                 show_summary
                 echo -e "\n${GREEN}--- Sing-Box-VRV 核心重装成功 ---${NC}"
                 ;;
@@ -208,9 +208,9 @@ install_vrv() {
                 echo "--- 开始全新安装 (将覆盖旧数据) ---"
                 rm -rf /etc/sing-box
                 enable_tfo
-                install_singbox_core || return 1
-                generate_config || return 1
-                start_service || return 1
+                install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+                start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
                 show_summary
                 echo -e "\n${GREEN}--- Sing-Box-VRV 全新安装成功 ---${NC}"
                 ;;
@@ -220,9 +220,9 @@ install_vrv() {
     else
         echo "--- 开始首次安装 Sing-Box-VRV ---"
         enable_tfo
-        install_singbox_core || return 1
-        generate_config || return 1
-        start_service || return 1
+        install_singbox_core || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+        generate_config || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
+        start_service || { read -n 1 -s -r -p "按任意键返回主菜单..."; return 1; }
         show_summary
         echo -e "\n${GREEN}--- Sing-Box-VRV 安装成功 ---${NC}"
     fi
@@ -230,7 +230,6 @@ install_vrv() {
     echo -e "\n${GREEN}安装/重装流程已完成！${NC}"
     echo "您可以随时通过再次运行以下命令来管理平台："
     echo -e "${GREEN}./sbv.sh${NC}"
-    return 0
 }
 
 change_reality_domain() {
@@ -285,7 +284,7 @@ manage_service() {
         1) systemctl restart sing-box; echo -e "${GREEN}服务已重启。${NC}"; sleep 1 ;;
         2) systemctl stop sing-box; echo "服务已停止。"; sleep 1 ;;
         3) systemctl start sing-box; echo -e "${GREEN}服务已启动。${NC}"; sleep 1 ;;
-        4) systemctl status sing-box ;;
+        4) systemctl --no-pager status sing-box ;;
         5) 
             echo -e "\n>>> 正在临时开启日志功能..."
             jq '.log = {"level": "info", "timestamp": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
@@ -347,8 +346,9 @@ update_script() {
     if [[ "$SCRIPT_VERSION" != "$new_version" ]]; then
         read -p "$(echo -e ${GREEN}"发现新版本 v${new_version}，是否更新? (y/N): "${NC})" confirm
         if [[ "${confirm,,}" != "n" ]]; then
-            mv "$temp_script_path" "$INSTALL_PATH"
+            cat "$temp_script_path" > "$INSTALL_PATH"
             chmod +x "$INSTALL_PATH"
+            rm -f "$temp_script_path"
             echo -e "${GREEN}脚本已成功更新至 v${new_version}！${NC}"
             echo "请重新运行 './sbv.sh' 来使用新版本。"
             exit 0
@@ -386,12 +386,22 @@ validate_reality_domain() {
     fi
 }
 
+get_service_status() {
+    if ! systemctl is-active --quiet sing-box; then
+        echo -e "${RED}已停止${NC}"
+    else
+        echo -e "${GREEN}运行中${NC}"
+    fi
+}
+
 main_menu() {
     while true; do
         clear
         echo "======================================================"
         echo "      Sing-Box-VRV v${SCRIPT_VERSION}      "
-        echo "  仅支持安装 sing-box (VLESS+Reality+Vision)  "
+        if [[ -f "$CONFIG_PATH" ]]; then
+            echo "  当前状态: $(get_service_status)"
+        fi
         echo "======================================================"
         if [[ ! -f "$CONFIG_PATH" ]]; then echo -e " 1. ${GREEN}安装 Sing-Box-VRV${NC}"; else echo -e " 1. ${GREEN}重新安装 Sing-Box-VRV${NC}"; fi
         echo " 2. 查看配置信息"
