@@ -3,9 +3,9 @@
 #====================================================================================
 # vwaw.sh - VLESS+WS+ArgoTunnel+WireProxy Auto-Installer
 #
-#   wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh" && chmod +x vwaw.sh && ./vwaw.sh
-#   Version: 1.0.0
 #   Description: Automates the setup of a secure and robust proxy solution.
+#   Usage:
+#   wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh" && chmod +x vwaw.sh && ./vwaw.sh
 #
 #====================================================================================
 
@@ -20,6 +20,7 @@ NC='\033[0m' # No Color
 XRAY_CONFIG_PATH="/usr/local/etc/xray/config.json"
 CLOUDFLARED_CONFIG_DIR="/etc/cloudflared"
 CLOUDFLARED_CONFIG_PATH="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+WARP_SCRIPT_URL="https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh"
 TUNNEL_NAME="vwaw-tunnel"
 
 # --- Utility Functions ---
@@ -37,8 +38,24 @@ check_os() {
     fi
 }
 
-install_dependencies() {
-    echo -e "${BLUE}>>> 正在更新软件包列表并安装依赖...${NC}"
+check_dependencies() {
+    echo -e "${BLUE}>>> 正在检查核心依赖...${NC}"
+    local missing_deps=()
+    for cmd in curl wget systemctl dpkg lsof nano; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing_deps+=("$cmd")
+        fi
+    done
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo -e "${RED}错误: 缺少以下核心依赖: ${missing_deps[*]}${NC}"
+        echo -e "${YELLOW}请尝试运行 'apt update && apt install -y ${missing_deps[*]}' 来安装它们。${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}核心依赖检查通过。${NC}"
+}
+
+install_base_dependencies() {
+    echo -e "${BLUE}>>> 正在更新软件包列表并安装基础依赖...${NC}"
     apt update && apt install -y curl wget nano lsof > /dev/null 2>&1
 }
 
@@ -119,18 +136,33 @@ EOF
 }
 
 install_wireproxy() {
-    echo -e "${BLUE}>>> 即将调用 fscarmen/warp 脚本安装 WireProxy (SOCKS5)...${NC}"
-    wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh > /dev/null 2>&1
+    echo -e "${BLUE}>>> 即将安装 WireProxy (SOCKS5)...${NC}"
+    wget -N ${WARP_SCRIPT_URL} -O menu.sh > /dev/null 2>&1
+    chmod +x menu.sh
+
+    echo -e "${YELLOW}----------------------------------------------------------------${NC}"
+    echo -e " ${YELLOW}请选择 WireProxy 安装方式:${NC}"
+    echo -e " ${GREEN}1. 全自动安装 (默认，适用于大多数用户)${NC}"
+    echo -e " ${BLUE}2. 手动交互安装 (适用于WARP+账户或需要自定义的用户)${NC}"
+    echo -e "${YELLOW}----------------------------------------------------------------${NC}"
+    read -rp "请输入数字 [1-2] (直接按回车将选择 1): " warp_choice
     
-    # 尝试以非交互方式运行选项 'w' (13)
-    # 注意: 这取决于 fscarmen 脚本是否支持这种调用方式。
-    # 如果不支持，用户可能需要手动选择。
-    echo "w" | bash menu.sh
-    
-    # 检查SOCKS5代理端口是否已监听
+    case ${warp_choice} in
+        2)
+            echo -e "${BLUE}>>> 即将进入手动安装模式，请根据提示操作...${NC}"
+            echo -e "${YELLOW}请在菜单中选择与 'wireproxy' 或 'SOCKS5' 相关的选项 (通常是 13 或 w)。${NC}"
+            ./menu.sh
+            ;;
+        *)
+            echo -e "${BLUE}>>> 正在进行全自动安装...${NC}"
+            echo "w" | ./menu.sh
+            ;;
+    esac
+
     if ! lsof -i:40000 > /dev/null; then
-        echo -e "${YELLOW}WireProxy SOCKS5 代理似乎未启动。请尝试手动运行 'bash menu.sh' 并选择选项 13。${NC}"
-        echo -e "${YELLOW}脚本将继续，但您需要手动确保 SOCKS5 代理正常运行。${NC}"
+        echo -e "${RED}WireProxy SOCKS5 代理安装或启动失败。${NC}"
+        echo -e "${YELLOW}建议您稍后运行主菜单中的 '打开 WARP 手动操作菜单' 进行检查和重装。${NC}"
+        exit 1
     else
         echo -e "${GREEN}WireProxy SOCKS5 代理安装并启动成功。${NC}"
     fi
@@ -154,34 +186,24 @@ configure_cloudflared() {
     echo -e "${YELLOW} 重要：接下来需要您手动进行浏览器授权。                         ${NC}"
     echo -e "${YELLOW}----------------------------------------------------------------${NC}"
     
-    # 获取授权链接
-    LOGIN_URL=$(cloudflared tunnel login | grep -o 'https://dash.cloudflare.com/[^ ]*')
-
-    if [ -z "$LOGIN_URL" ]; then
-        echo -e "${RED}无法获取Cloudflare授权链接，请检查网络或Cloudflared安装。${NC}"
-        exit 1
-    fi
+    cloudflared tunnel login
     
-    echo -e "请复制以下链接，并在您 ${GREEN}本地电脑的浏览器${NC} 中打开它："
-    echo -e "${BLUE}${LOGIN_URL}${NC}"
-    echo -e "请选择您要使用的域名 (${GREEN}${DOMAIN}${NC}) 进行授权。"
+    echo -e "请确认您已在浏览器中成功授权域名 (${GREEN}${DOMAIN}${NC})。"
     echo -e "授权成功后，请回到本终端..."
     pause_for_user
 
-    # 创建隧道并提取UUID
     echo -e "${BLUE}>>> 正在创建 Tunnel 并提取 UUID...${NC}"
     TUNNEL_INFO=$(cloudflared tunnel create ${TUNNEL_NAME})
     TUNNEL_UUID=$(echo "${TUNNEL_INFO}" | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}')
     
     if [ -z "$TUNNEL_UUID" ]; then
         echo -e "${RED}创建 Tunnel 失败或无法提取 Tunnel UUID。${NC}"
-        echo -e "${RED}请检查您是否已成功授权。${NC}"
+        echo -e "${RED}请检查您是否已成功授权。脚本将退出。${NC}"
         exit 1
     fi
     
     echo -e "${GREEN}Tunnel 创建成功, UUID: ${TUNNEL_UUID}${NC}"
     
-    # 生成配置文件
     echo -e "${BLUE}>>> 正在生成 Cloudflared 配置文件...${NC}"
     mkdir -p ${CLOUDFLARED_CONFIG_DIR}
     CREDENTIALS_FILE="/root/.cloudflared/${TUNNEL_UUID}.json"
@@ -196,7 +218,6 @@ ingress:
 EOF
     echo -e "${GREEN}Cloudflared 配置文件生成成功。${NC}"
 
-    # 路由域名
     echo -e "${BLUE}>>> 正在将域名路由到 Tunnel...${NC}"
     cloudflared tunnel route dns ${TUNNEL_NAME} ${DOMAIN}
 }
@@ -214,25 +235,44 @@ start_services() {
 }
 
 display_config_info() {
-    # 重新从文件中读取，确保信息最新
+    if [ ! -f "${XRAY_CONFIG_PATH}" ] || [ ! -f "${CLOUDFLARED_CONFIG_PATH}" ]; then
+        echo -e "${RED}未找到完整的配置文件，无法显示信息。${NC}"
+        return
+    fi
+    
     VLESS_UUID=$(grep -oP '"id": "\K[^"]+' ${XRAY_CONFIG_PATH})
     WS_PATH=$(grep -oP '"path": "\K[^"]+' ${XRAY_CONFIG_PATH})
+    DOMAIN=$(grep -oP 'hostname: \K.*' ${CLOUDFLARED_CONFIG_PATH})
 
+    clear
     echo -e "${GREEN}================================================================${NC}"
     echo -e "${GREEN}                 VWAW 安装成功! 配置信息如下                  ${NC}"
     echo -e "${GREEN}================================================================${NC}"
-    echo -e " ${YELLOW}地址 (Address):         ${NC} ${DOMAIN}"
+    echo -e " ${YELLOW}地址 (Address):         ${NC} ${DOMAIN} (或优选IP)"
     echo -e " ${YELLOW}端口 (Port):            ${NC} 443"
     echo -e " ${YELLOW}用户ID (UUID):          ${NC} ${VLESS_UUID}"
     echo -e " ${YELLOW}传输协议 (Network):     ${NC} ws"
     echo -e " ${YELLOW}路径 (Path):            ${NC} ${WS_PATH}"
     echo -e " ${YELLOW}传输安全 (TLS):         ${NC} tls"
-    echo -e " ${YELLOW}主机/SNI (Host):        ${NC} ${DOMAIN}"
     echo -e " "
-    echo -e " ${BLUE}--- 客户端自选IP优化 ---${NC}"
-    echo -e " 1. 使用工具 (如 aist.site) 查找对您本地网络最优的Cloudflare IP。"
-    echo -e " 2. 在客户端配置中，将 ${YELLOW}地址 (Address)${NC} 修改为您找到的IP。"
-    echo -e " 3. 确保 ${YELLOW}主机/SNI (Host)${NC} 字段 ${RED}仍然是${NC} ${YELLOW}${DOMAIN}${NC}。"
+    echo -e " ${YELLOW}--- 客户端兼容性关键参数 ---${NC}"
+    echo -e " ${GREEN}servername / SNI:       ${NC} ${DOMAIN}"
+    echo -e " ${GREEN}Host (in ws-headers):   ${NC} ${DOMAIN}"
+    echo -e " "
+    echo -e " ${BLUE}--- Clash/Stash YAML 格式示例 (请替换自选IP) ---${NC}"
+    echo -e " - name: VWAW-Node"
+    echo -e "   type: vless"
+    echo -e "   server: 104.20.20.20 # <--- 替换为您自选的Cloudflare IP"
+    echo -e "   port: 443"
+    echo -e "   uuid: ${VLESS_UUID}"
+    echo -e "   network: ws"
+    echo -e "   tls: true"
+    echo -e "   udp: false"
+    echo -e "   servername: ${DOMAIN} # <--- 关键参数！确保Stash等客户端正常工作"
+    echo -e "   ws-opts:"
+    echo -e "     path: \"${WS_PATH}\""
+    echo -e "     headers:"
+    echo -e "       Host: ${DOMAIN}"
     echo -e "${GREEN}================================================================${NC}"
 }
 
@@ -245,17 +285,14 @@ uninstall_vwaw() {
     fi
     
     echo -e "${BLUE}>>> 正在停止服务...${NC}"
-    systemctl stop xray
-    systemctl disable xray
-    systemctl stop cloudflared
-    systemctl disable cloudflared
+    systemctl stop xray 2>/dev/null
+    systemctl disable xray 2>/dev/null
+    systemctl stop cloudflared 2>/dev/null
+    systemctl disable cloudflared 2>/dev/null
     
     echo -e "${BLUE}>>> 正在卸载 Cloudflared...${NC}"
     if command -v cloudflared &> /dev/null; then
-        TUNNEL_UUID=$(grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' ${CLOUDFLARED_CONFIG_PATH} 2>/dev/null)
-        if [ -n "$TUNNEL_UUID" ]; then
-             cloudflared tunnel delete ${TUNNEL_NAME}
-        fi
+        cloudflared tunnel delete ${TUNNEL_NAME} 2>/dev/null
         cloudflared service uninstall > /dev/null 2>&1
         dpkg --purge cloudflared > /dev/null 2>&1
     fi
@@ -265,7 +302,7 @@ uninstall_vwaw() {
     
     echo -e "${BLUE}>>> 正在卸载 WireProxy (调用fscarmen脚本)...${NC}"
     if [ -f "menu.sh" ]; then
-        echo "u" | bash menu.sh
+        echo "u" | ./menu.sh
     fi
     
     echo -e "${BLUE}>>> 正在删除配置文件和残留文件...${NC}"
@@ -276,33 +313,36 @@ uninstall_vwaw() {
     echo -e "${GREEN}VWAW 已成功卸载。${NC}"
 }
 
-# --- Main Function ---
+# --- Main Menu Function ---
 
 main_menu() {
     clear
     echo "-------------- VWAW 一键部署脚本 --------------"
     echo "          -- VLESS+WS+ArgoTunnel+WireProxy --"
     echo ""
-    echo -e "${GREEN} 1. 安装 VWAW (首次使用请选此项)${NC}"
-    echo -e "${RED} 2. 卸载 VWAW (将移除所有相关组件)${NC}"
+    echo -e "${GREEN} 1. 安装 VWAW${NC}"
+    echo -e "${RED} 2. 卸载 VWAW${NC}"
     echo "---------------------------------------------"
-    echo -e "${BLUE} 3. 查看 VWAW 配置信息${NC}"
-    echo -e "${YELLOW} 4. 重启 VWAW 所有服务${NC}"
+    echo -e "${BLUE} 3. 查看 配置信息${NC}"
+    echo -e "${YELLOW} 4. 重启 所有服务${NC}"
+    echo -e "${BLUE} 5. 更换 WARP 出口IP${NC}"
+    echo -e "${YELLOW} 6. 打开 WARP 手动操作菜单${NC}"
     echo "---------------------------------------------"
     echo " 0. 退出脚本"
     echo ""
-    read -rp "请输入数字 [0-4]: " choice
+    read -rp "请输入数字 [0-6]: " choice
 
     case ${choice} in
         1)
             check_root
             check_os
+            check_dependencies
             read -rp "请输入您准备用于隧道的域名 (例如 tunnel.yourdomain.com): " DOMAIN
             if [ -z "${DOMAIN}" ]; then
                 echo -e "${RED}域名不能为空!${NC}"
                 exit 1
             fi
-            install_dependencies
+            install_base_dependencies
             install_xray
             configure_xray
             install_wireproxy
@@ -316,18 +356,32 @@ main_menu() {
             uninstall_vwaw
             ;;
         3)
-            if [ -f "${XRAY_CONFIG_PATH}" ]; then
-                DOMAIN=$(grep -oP 'hostname: \K.*' ${CLOUDFLARED_CONFIG_PATH} 2>/dev/null)
-                display_config_info
-            else
-                echo -e "${RED}未找到配置文件，请先安装。${NC}"
-            fi
+            display_config_info
             ;;
         4)
             check_root
-            systemctl restart xray
-            systemctl restart cloudflared
-            echo -e "${GREEN}服务已重启。${NC}"
+            systemctl restart xray 2>/dev/null
+            systemctl restart cloudflared 2>/dev/null
+            echo "i" | ./menu.sh # A simple way to restart wireproxy
+            echo -e "${GREEN}服务已尝试重启。${NC}"
+            ;;
+        5)
+            check_root
+            if [ -f "menu.sh" ]; then
+                echo -e "${YELLOW}即将进入更换IP界面...${NC}"
+                echo "i" | ./menu.sh
+            else
+                echo -e "${RED}未找到 'menu.sh' 脚本, 请先至少运行一次安装。${NC}"
+            fi
+            ;;
+        6)
+            check_root
+            if [ -f "menu.sh" ]; then
+                echo -e "${YELLOW}即将打开WARP手动操作菜单...${NC}"
+                ./menu.sh
+            else
+                echo -e "${RED}未找到 'menu.sh' 脚本, 请先至少运行一次安装。${NC}"
+            fi
             ;;
         0)
             exit 0
