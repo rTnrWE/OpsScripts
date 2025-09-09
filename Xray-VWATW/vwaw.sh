@@ -3,7 +3,7 @@
 #====================================================================================
 # vwaw.sh - VLESS+WS+ArgoTunnel+WireProxy Auto-Installer
 #
-#   Author: Gemini & Collaborator
+#   wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh" && chmod +x vwaw.sh && ./vwaw.sh
 #   Version: 1.0.0
 #   Description: Automates the setup of a secure and robust proxy solution.
 #
