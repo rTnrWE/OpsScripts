@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.6.3
+# REVISION:     1.6.5
 #================================================================================
 
-SCRIPT_VERSION="1.6.3"
+SCRIPT_VERSION="1.6.5"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -34,11 +34,10 @@ check_dependencies() {
     done
 }
 
-enable_tfo() {
-    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then return 0; fi
-    echo "net.ipv4.tcp_fastopen = 3" > /etc/sysctl.d/99-tcp-fastopen.conf
-    sysctl -p /etc/sysctl.d/99-tcp-fastopen.conf >/dev/null 2>&1
-    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then echo -e "${GREEN}TCP Fast Open (TFO) 已成功开启。${NC}"; else echo "警告：无法自动开启 TFO，可能会影响性能。"; fi
+check_tfo_status() {
+    if ! sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
+        echo -e "${RED}警告：检测到您的系统可能未开启 TCP Fast Open (TFO)。${NC}"
+    fi
 }
 
 install_singbox_core() {
@@ -244,7 +243,6 @@ show_summary() {
 
 install_vrv() {
     install_script_if_needed
-    enable_tfo # Moved here to check/enable TFO on every install/reinstall action
     
     if [[ -f "$CONFIG_PATH" ]]; then
         echo "检测到已有安装。"
@@ -252,6 +250,7 @@ install_vrv() {
         case "$reinstall_choice" in
             1)
                 echo "--- 正在使用旧配置重装核心 ---"
+                check_tfo_status
                 install_singbox_core || { return 1; }
                 start_service || { return 1; }
                 show_summary
@@ -260,6 +259,7 @@ install_vrv() {
             2)
                 echo "--- 开始全新安装 (将覆盖旧数据) ---"
                 rm -rf /etc/sing-box
+                check_tfo_status
                 install_singbox_core || { return 1; }
                 generate_config || { return 1; }
                 start_service || { return 1; }
@@ -271,6 +271,7 @@ install_vrv() {
         esac
     else
         echo "--- 开始首次安装 Sing-Box-VRV ---"
+        check_tfo_status
         install_singbox_core || { return 1; }
         generate_config || { return 1; }
         start_service || { return 1; }
