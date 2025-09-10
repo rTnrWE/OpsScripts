@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.6.2.2
+# REVISION:     1.6.3
 #================================================================================
 
-SCRIPT_VERSION="1.6.2.2"
+SCRIPT_VERSION="1.6.3"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -15,6 +15,9 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 CONFIG_PATH="/etc/sing-box/config.json"
 INFO_PATH="/etc/sing-box/vrv_info.env"
 SINGBOX_BINARY=""
+
+# Clean up terminal color on exit
+trap 'echo -en "${NC}"' EXIT
 
 check_root() { [[ "$EUID" -ne 0 ]] && { echo -e "${RED}错误：此脚本必须以 root 权限运行。${NC}"; exit 1; }; }
 
@@ -241,6 +244,7 @@ show_summary() {
 
 install_vrv() {
     install_script_if_needed
+    enable_tfo # Moved here to check/enable TFO on every install/reinstall action
     
     if [[ -f "$CONFIG_PATH" ]]; then
         echo "检测到已有安装。"
@@ -256,7 +260,6 @@ install_vrv() {
             2)
                 echo "--- 开始全新安装 (将覆盖旧数据) ---"
                 rm -rf /etc/sing-box
-                enable_tfo
                 install_singbox_core || { return 1; }
                 generate_config || { return 1; }
                 start_service || { return 1; }
@@ -268,7 +271,6 @@ install_vrv() {
         esac
     else
         echo "--- 开始首次安装 Sing-Box-VRV ---"
-        enable_tfo
         install_singbox_core || { return 1; }
         generate_config || { return 1; }
         start_service || { return 1; }
@@ -334,7 +336,9 @@ manage_service() {
         2) systemctl stop sing-box; echo "服务已停止。"; sleep 1 ;;
         3) systemctl start sing-box; echo -e "${GREEN}服务已启动。${NC}"; sleep 1 ;;
         4) 
+            echo "---"
             systemctl status sing-box
+            echo "---"
             read -n 1 -s -r -p "按任意键返回服务菜单..."
             ;;
         5) 
