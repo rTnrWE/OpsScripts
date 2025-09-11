@@ -1,15 +1,15 @@
 #!/bin/bash
 #
-# find_cf_ips.sh | v1.0.3
+# find_cf_ips.sh | v1.0.5
 #
-# Robust Run Command (macOS/Linux/Windows):
-# bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh | sed 's/\r$//')"
+# Run Command (macOS/Linux/Windows):
+# bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh)"
 #
 
 #=================================================
 #               CONFIGURATION
 #=================================================
-SCRIPT_VERSION="1.0.3"
+SCRIPT_VERSION="1.0.5"
 DEFAULT_LATENCY=100      # 默认延迟阈值 (ms)
 PING_COUNT=5             # Ping次数
 C_SEARCH_RANGE=25        # C段探测范围
@@ -81,11 +81,17 @@ probe_c_segments() {
         is_good=$(awk -v lat="$latency" -v max="$max_latency" 'BEGIN { print (lat > 0 && lat < max) }')
 
         if [[ "$is_good" -eq 1 ]]; then
-            echo -e "  -> ${GREEN}发现可用段: ${a}.${b}.${c_current}.x (延迟: ${latency}ms)${NC}\n" >&2
+            echo -e "  -> ${GREEN}发现可用段: ${a}.${b}.${c_current}.x (平均延迟: ${latency}ms)${NC}\n" >&2
             found_ranges+=("${a}.${b}.${c_current}.x")
             failure_counter=0
         else
-            echo -e "  -> ${RED}该段不佳或超时 (延迟: ${latency}ms)${NC}\n" >&2
+            # LOGIC REFINED: Provide meaningful feedback for different failure types.
+            if [[ "$latency" == "9999" ]]; then
+                echo -e "  -> ${RED}该段不通或请求超时.${NC}\n" >&2
+            else
+                echo -e "  -> ${RED}该段延迟过高 (平均延迟: ${latency}ms)${NC}\n" >&2
+            fi
+            
             ((failure_counter++))
             if [ $failure_counter -ge $C_FAIL_TOLERANCE ]; then
                 echo -e "${RED}已连续失败 ${failure_counter} 次, 停止该方向探测.${NC}" >&2
@@ -155,8 +161,8 @@ for direction in -1 1; do
             if [[ "$is_good" -eq 1 ]]; then
                 echo -e "${GREEN}在 ${A}.${b_current}.x.x 发现存活点, 开始全面扫描...${NC}" >&2
                 ALL_GOOD_RANGES+=("${A}.${b_current}.${c_foothold}.x")
-                down_c_results=($(probe_c_segments $A $b_current $c_foothold -1 $MAX_latency))
-                up_c_results=($(probe_c_segments $A $b_current $c_foothold 1 $MAX_latency))
+                down_c_results=($(probe_c_segments $A $b_current $c_foothold -1 $MAX_LATENCY))
+                up_c_results=($(probe_c_segments $A $b_current $c_foothold 1 $MAX_LATENCY))
                 ALL_GOOD_RANGES+=("${down_c_results[@]}" "${up_c_results[@]}")
                 foothold_found=true
                 break 
