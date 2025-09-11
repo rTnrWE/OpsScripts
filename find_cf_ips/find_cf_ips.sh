@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# find_cf_ips.sh | v1.0.6
+# find_cf_ips.sh | v1.0.7
 #
 # Run Command (macOS/Linux/Windows):
 # bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh)"
@@ -9,13 +9,13 @@
 #=================================================
 #               CONFIGURATION
 #=================================================
-SCRIPT_VERSION="1.0.6"
+SCRIPT_VERSION="1.0.7"
 DEFAULT_LATENCY=100      # 默认延迟阈值 (ms)
 PING_COUNT=5             # Ping次数
+DEFAULT_C_FAIL_TOLERANCE=3 # 默认C段连续失败容忍度
 C_SEARCH_RANGE=25        # C段探测范围
 B_SEARCH_RANGE=10        # B段探测范围
-C_FAIL_TOLERANCE=3       # C段连续失败容忍度
-B_FAIL_TOLERANCE=2       # B段连续失败容忍度
+B_FAIL_TOLERANCE=2       # B段连续失败容忍度 (保持固定)
 
 #=================================================
 #                  COLORS (Simplified)
@@ -61,7 +61,7 @@ check_latency() {
 }
 
 probe_c_segments() {
-    local a=$1 b=$2 start_c=$3 direction=$4 max_latency=$5
+    local a=$1 b=$2 start_c=$3 direction=$4 max_latency=$5 c_fail_tolerance=$6
     local failure_counter=0
     local found_ranges=()
 
@@ -73,7 +73,6 @@ probe_c_segments() {
         random_d=$(( (RANDOM % 254) + 1 ))
         target_ip="${a}.${b}.${c_current}.${random_d}"
         
-        # Using default color for probing messages
         echo "探测C段: ${target_ip}" >&2
         latency=$(check_latency "$target_ip")
         
@@ -91,7 +90,7 @@ probe_c_segments() {
             fi
             
             ((failure_counter++))
-            if [ $failure_counter -ge $C_FAIL_TOLERANCE ]; then
+            if [ $failure_counter -ge $c_fail_tolerance ]; then
                 echo -e "${RED}已连续失败 ${failure_counter} 次, 停止该方向探测.${NC}" >&2
                 break
             fi
@@ -114,10 +113,30 @@ if [[ ! $start_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
   exit 1
 fi
 
-read -p "请输入延迟阈值 (默认 ${DEFAULT_LATENCY}ms): " MAX_LATENCY
+# FEATURE: Test base IP first to provide context for user.
+echo "" >&2 # Add a newline for spacing
+echo "正在测试基准IP的延迟..." >&2
+initial_latency=$(check_latency "$start_ip")
+
+if [[ "$initial_latency" == "9999" ]]; then
+    echo -e "${RED}错误: 基准IP ${start_ip} 无法访问或请求超时。请检查IP或网络后重试。${NC}" >&2
+    exit 1
+fi
+echo -e "基准IP ${start_ip} 的平均延迟为: ${GREEN}${initial_latency}ms${NC}" >&2
+echo "" >&2 # Add a newline for spacing
+
+read -p "请输入探测延迟阈值 (默认 ${DEFAULT_LATENCY}ms): " MAX_LATENCY
 : "${MAX_LATENCY:=${DEFAULT_LATENCY}}"
 if ! [[ "$MAX_LATENCY" =~ ^[0-9]+$ ]]; then
     echo -e "${RED}错误: 延迟阈值必须是数字!${NC}" >&2
+    exit 1
+fi
+
+# FEATURE: Allow user to define failure tolerance.
+read -p "请输入连续失败容忍次数 (1-10, 默认 ${DEFAULT_C_FAIL_TOLERANCE}): " C_FAIL_TOLERANCE
+: "${C_FAIL_TOLERANCE:=${DEFAULT_C_FAIL_TOLERANCE}}"
+if ! [[ "$C_FAIL_TOLERANCE" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}错误: 输入必须是数字!${NC}" >&2
     exit 1
 fi
 
@@ -126,18 +145,17 @@ IFS='.' read -r A B_START C_START D <<< "$start_ip"
 echo "---------------------------------------------------" >&2
 echo "基准IP: $start_ip" >&2
 echo "延迟阈值: ${MAX_LATENCY}ms" >&2
+echo "连续失败容忍: ${C_FAIL_TOLERANCE}次" >&2
 echo "---------------------------------------------------" >&2
 
 ALL_GOOD_RANGES=()
 ALL_GOOD_RANGES+=("${A}.${B_START}.${C_START}.x") 
 
-# Using default color for phase markers
 echo -e "\n--- Phase 1: 开始探测 ${A}.${B_START}.x.x ---" >&2
-down_c_results=($(probe_c_segments $A $B_START $C_START -1 $MAX_LATENCY))
-up_c_results=($(probe_c_segments $A $B_START $C_START 1 $MAX_LATENCY))
+down_c_results=($(probe_c_segments $A $B_START $C_START -1 $MAX_LATENCY $C_FAIL_TOLERANCE))
+up_c_results=($(probe_c_segments $A $B_START $C_START 1 $MAX_LATENCY $C_FAIL_TOLERANCE))
 ALL_GOOD_RANGES+=("${down_c_results[@]}" "${up_c_results[@]}")
 
-# Using default color for phase markers
 echo -e "\n--- Phase 2: 开始探测相邻B段 ---" >&2
 for direction in -1 1; do
     b_failure_counter=0
@@ -147,7 +165,6 @@ for direction in -1 1; do
         b_current=$((B_START + i * direction))
         if [ $b_current -lt 0 ] || [ $b_current -gt 255 ]; then break; fi
         
-        # Using default color for probing messages
         echo -e "\n尝试B段: ${A}.${b_current}.x.x" >&2
         
         foothold_found=false
@@ -160,8 +177,9 @@ for direction in -1 1; do
             if [[ "$is_good" -eq 1 ]]; then
                 echo -e "  -> ${GREEN}在 ${A}.${b_current}.x.x 发现存活点, 开始全面扫描...${NC}" >&2
                 ALL_GOOD_RANGES+=("${A}.${b_current}.${c_foothold}.x")
-                down_c_results=($(probe_c_segments $A $b_current $c_foothold -1 $MAX_LATENCY))
-                up_c_results=($(probe_c_segments $A $b_current $c_foothold 1 $MAX_LATENCY))
+                # B-segment probing will use the user-defined C-segment tolerance as well
+                down_c_results=($(probe_c_segments $A $b_current $c_foothold -1 $MAX_LATENCY $C_FAIL_TOLERANCE))
+                up_c_results=($(probe_c_segments $A $b_current $c_foothold 1 $MAX_LATENCY $C_FAIL_TOLERANCE))
                 ALL_GOOD_RANGES+=("${down_c_results[@]}" "${up_c_results[@]}")
                 foothold_found=true
                 break 
