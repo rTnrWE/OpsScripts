@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# find_cf_ips.sh | v1.0.7
+# find_cf_ips.sh | v1.0.8
 #
 # Run Command (macOS/Linux/Windows):
 # bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh)"
@@ -9,7 +9,7 @@
 #=================================================
 #               CONFIGURATION
 #=================================================
-SCRIPT_VERSION="1.0.7"
+SCRIPT_VERSION="1.0.8"
 DEFAULT_LATENCY=100      # 默认延迟阈值 (ms)
 PING_COUNT=5             # Ping次数
 DEFAULT_C_FAIL_TOLERANCE=3 # 默认C段连续失败容忍度
@@ -107,23 +107,35 @@ echo "===================================================" >&2
 echo "  相邻IP段探测工具 (v${SCRIPT_VERSION})" >&2
 echo "===================================================" >&2
 
-read -p "请输入一个基准IP地址: " start_ip
-if [[ ! $start_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-  echo -e "${RED}错误: IP地址格式不正确!${NC}" >&2
-  exit 1
-fi
+# --- USER-FRIENDLY LOOP TO GET A VALID AND REACHABLE BASE IP ---
+while true; do
+    read -p "请输入一个基准IP地址 (直接回车退出): " start_ip
+    
+    # Allow user to exit gracefully
+    if [[ -z "$start_ip" ]]; then
+        echo "用户选择退出。" >&2
+        exit 0
+    fi
 
-# FEATURE: Test base IP first to provide context for user.
-echo "" >&2 # Add a newline for spacing
-echo "正在测试基准IP的延迟..." >&2
-initial_latency=$(check_latency "$start_ip")
+    # Check IP format
+    if [[ ! $start_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo -e "${RED}错误: IP地址格式不正确，请重新输入。${NC}\n" >&2
+        continue
+    fi
 
-if [[ "$initial_latency" == "9999" ]]; then
-    echo -e "${RED}错误: 基准IP ${start_ip} 无法访问或请求超时。请检查IP或网络后重试。${NC}" >&2
-    exit 1
-fi
-echo -e "基准IP ${start_ip} 的平均延迟为: ${GREEN}${initial_latency}ms${NC}" >&2
-echo "" >&2 # Add a newline for spacing
+    # Test the IP's reachability
+    echo "正在测试基准IP..." >&2
+    initial_latency=$(check_latency "$start_ip")
+
+    if [[ "$initial_latency" != "9999" ]]; then
+        # SUCCESS: We got a working IP, print latency and break the loop.
+        echo -e "基准IP ${start_ip} 的平均延迟为: ${GREEN}${initial_latency}ms${NC}\n" >&2
+        break
+    else
+        # FAILURE: Inform the user and the loop will ask for input again.
+        echo -e "${RED}错误: 基准IP ${start_ip} 无法访问或请求超时。${NC}\n" >&2
+    fi
+done
 
 read -p "请输入探测延迟阈值 (默认 ${DEFAULT_LATENCY}ms): " MAX_LATENCY
 : "${MAX_LATENCY:=${DEFAULT_LATENCY}}"
@@ -132,7 +144,6 @@ if ! [[ "$MAX_LATENCY" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-# FEATURE: Allow user to define failure tolerance.
 read -p "请输入连续失败容忍次数 (1-10, 默认 ${DEFAULT_C_FAIL_TOLERANCE}): " C_FAIL_TOLERANCE
 : "${C_FAIL_TOLERANCE:=${DEFAULT_C_FAIL_TOLERANCE}}"
 if ! [[ "$C_FAIL_TOLERANCE" =~ ^[0-9]+$ ]]; then
@@ -177,7 +188,6 @@ for direction in -1 1; do
             if [[ "$is_good" -eq 1 ]]; then
                 echo -e "  -> ${GREEN}在 ${A}.${b_current}.x.x 发现存活点, 开始全面扫描...${NC}" >&2
                 ALL_GOOD_RANGES+=("${A}.${b_current}.${c_foothold}.x")
-                # B-segment probing will use the user-defined C-segment tolerance as well
                 down_c_results=($(probe_c_segments $A $b_current $c_foothold -1 $MAX_LATENCY $C_FAIL_TOLERANCE))
                 up_c_results=($(probe_c_segments $A $b_current $c_foothold 1 $MAX_LATENCY $C_FAIL_TOLERANCE))
                 ALL_GOOD_RANGES+=("${down_c_results[@]}" "${up_c_results[@]}")
