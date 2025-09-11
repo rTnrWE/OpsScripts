@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# find_cf_ips.sh | v1.0.5
+# find_cf_ips.sh | v1.0.6
 #
 # Run Command (macOS/Linux/Windows):
 # bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh)"
@@ -9,7 +9,7 @@
 #=================================================
 #               CONFIGURATION
 #=================================================
-SCRIPT_VERSION="1.0.5"
+SCRIPT_VERSION="1.0.6"
 DEFAULT_LATENCY=100      # 默认延迟阈值 (ms)
 PING_COUNT=5             # Ping次数
 C_SEARCH_RANGE=25        # C段探测范围
@@ -18,12 +18,10 @@ C_FAIL_TOLERANCE=3       # C段连续失败容忍度
 B_FAIL_TOLERANCE=2       # B段连续失败容忍度
 
 #=================================================
-#                  COLORS
+#                  COLORS (Simplified)
 #=================================================
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
 RED='\033[0;31m'
-BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 #=================================================
@@ -75,7 +73,8 @@ probe_c_segments() {
         random_d=$(( (RANDOM % 254) + 1 ))
         target_ip="${a}.${b}.${c_current}.${random_d}"
         
-        echo -e "${YELLOW}探测C段: ${target_ip}${NC}" >&2
+        # Using default color for probing messages
+        echo "探测C段: ${target_ip}" >&2
         latency=$(check_latency "$target_ip")
         
         is_good=$(awk -v lat="$latency" -v max="$max_latency" 'BEGIN { print (lat > 0 && lat < max) }')
@@ -85,7 +84,6 @@ probe_c_segments() {
             found_ranges+=("${a}.${b}.${c_current}.x")
             failure_counter=0
         else
-            # LOGIC REFINED: Provide meaningful feedback for different failure types.
             if [[ "$latency" == "9999" ]]; then
                 echo -e "  -> ${RED}该段不通或请求超时.${NC}\n" >&2
             else
@@ -133,14 +131,14 @@ echo "---------------------------------------------------" >&2
 ALL_GOOD_RANGES=()
 ALL_GOOD_RANGES+=("${A}.${B_START}.${C_START}.x") 
 
-# --- Phase 1: Probe C-segments in current B-segment ---
-echo -e "\n${BLUE}--- Phase 1: 开始探测 ${A}.${B_START}.x.x ---${NC}" >&2
+# Using default color for phase markers
+echo -e "\n--- Phase 1: 开始探测 ${A}.${B_START}.x.x ---" >&2
 down_c_results=($(probe_c_segments $A $B_START $C_START -1 $MAX_LATENCY))
 up_c_results=($(probe_c_segments $A $B_START $C_START 1 $MAX_LATENCY))
 ALL_GOOD_RANGES+=("${down_c_results[@]}" "${up_c_results[@]}")
 
-# --- Phase 2: Probe adjacent B-segments ---
-echo -e "\n${BLUE}--- Phase 2: 开始探测相邻B段 ---${NC}" >&2
+# Using default color for phase markers
+echo -e "\n--- Phase 2: 开始探测相邻B段 ---" >&2
 for direction in -1 1; do
     b_failure_counter=0
     direction_text=$([[ $direction -eq 1 ]] && echo "向上" || echo "向下")
@@ -149,7 +147,8 @@ for direction in -1 1; do
         b_current=$((B_START + i * direction))
         if [ $b_current -lt 0 ] || [ $b_current -gt 255 ]; then break; fi
         
-        echo -e "\n${YELLOW}尝试B段: ${A}.${b_current}.x.x${NC}" >&2
+        # Using default color for probing messages
+        echo -e "\n尝试B段: ${A}.${b_current}.x.x" >&2
         
         foothold_found=false
         for c_foothold in 128 64 192 1; do
@@ -159,7 +158,7 @@ for direction in -1 1; do
             is_good=$(awk -v lat="$latency" -v max="$MAX_LATENCY" 'BEGIN { print (lat > 0 && lat < max) }')
             
             if [[ "$is_good" -eq 1 ]]; then
-                echo -e "${GREEN}在 ${A}.${b_current}.x.x 发现存活点, 开始全面扫描...${NC}" >&2
+                echo -e "  -> ${GREEN}在 ${A}.${b_current}.x.x 发现存活点, 开始全面扫描...${NC}" >&2
                 ALL_GOOD_RANGES+=("${A}.${b_current}.${c_foothold}.x")
                 down_c_results=($(probe_c_segments $A $b_current $c_foothold -1 $MAX_LATENCY))
                 up_c_results=($(probe_c_segments $A $b_current $c_foothold 1 $MAX_LATENCY))
