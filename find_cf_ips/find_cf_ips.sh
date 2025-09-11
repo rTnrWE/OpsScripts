@@ -1,13 +1,15 @@
 #!/bin/bash
 #
-# find_cf_ips.sh | v1.0.2
-# run: bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh)"
+# find_cf_ips.sh | v1.0.3
+#
+# Robust Run Command (macOS/Linux/Windows):
+# bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh | sed 's/\r$//')"
 #
 
 #=================================================
 #               CONFIGURATION
 #=================================================
-SCRIPT_VERSION="1.0.2"
+SCRIPT_VERSION="1.0.3"
 DEFAULT_LATENCY=100      # 默认延迟阈值 (ms)
 PING_COUNT=5             # Ping次数
 C_SEARCH_RANGE=25        # C段探测范围
@@ -153,8 +155,8 @@ for direction in -1 1; do
             if [[ "$is_good" -eq 1 ]]; then
                 echo -e "${GREEN}在 ${A}.${b_current}.x.x 发现存活点, 开始全面扫描...${NC}" >&2
                 ALL_GOOD_RANGES+=("${A}.${b_current}.${c_foothold}.x")
-                down_c_results=($(probe_c_segments $A $b_current $c_foothold -1 $MAX_LATENCY))
-                up_c_results=($(probe_c_segments $A $b_current $c_foothold 1 $MAX_LATENCY))
+                down_c_results=($(probe_c_segments $A $b_current $c_foothold -1 $MAX_latency))
+                up_c_results=($(probe_c_segments $A $b_current $c_foothold 1 $MAX_latency))
                 ALL_GOOD_RANGES+=("${down_c_results[@]}" "${up_c_results[@]}")
                 foothold_found=true
                 break 
