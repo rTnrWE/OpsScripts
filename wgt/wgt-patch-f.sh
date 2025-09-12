@@ -7,7 +7,7 @@
 #                Zero Trust (Teams) 账户的问题。它通过调用wgcf官方流程
 #                获取可靠的配置信息，并将其注入到fscarmen的配置文件中。
 #   Author:      Gemini 与 协作者
-#   Version:     1.1.0
+#   Version:     1.2.0
 #
 #   Usage:
 #   wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/wgt-patch-f.sh" && chmod +x wgt-patch-f.sh && sudo ./wgt-patch-f.sh
@@ -22,10 +22,11 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # --- 全局变量 ---
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 FSCARMEN_DIR="/etc/wireguard"
 WGCF_PROFILE_PATH="${FSCARMEN_DIR}/wgcf-profile.conf"
-WGCF_ACCOUNT_PATH="${FSCARMEN_DIR}/wgcf-account.toml" # 使用WGCF标准的账户文件
+# 使用wgcf的标准账户文件路径，避免与fscarmen的混淆
+WGCF_ACCOUNT_PATH="${FSCARMEN_DIR}/wgcf-account.toml" 
 FSCARMEN_ACCOUNT_DB="${FSCARMEN_DIR}/warp-account.conf"
 FSCARMEN_WARP_CONF="${FSCARMEN_DIR}/warp.conf"
 FSCARMEN_PROXY_CONF="${FSCARMEN_DIR}/proxy.conf"
@@ -89,16 +90,15 @@ get_zero_trust_config() {
     info "开始获取官方Zero Trust配置..."
     warn "----------------------------------------------------------------"
     warn " 重要：此过程需要您从Cloudflare Zero Trust后台获取一个密钥。"
+    warn " 请确保您已创建了Zero Trust组织并配置好登录策略。"
     warn "----------------------------------------------------------------"
     
-    info "第 1 步: 注册一个空的WARP设备"
-    wgcf register --accept-tos --config "${WGCF_ACCOUNT_PATH}"
-    if [ $? -ne 0 ]; then
-        error "wgcf注册免费账户失败，无法进行后续操作。"
-    fi
+    # 【核心修正】不再执行wgcf register。wgcf license命令会自动处理新设备的注册。
+    # 我们先删除可能存在的旧wgcf账户文件，以确保生成一个全新的、干净的Teams设备。
+    rm -f "${WGCF_ACCOUNT_PATH}"
 
     echo
-    info "第 2 步: 获取您的Zero Trust密钥 (License Key)"
+    info "步骤 1: 获取您的Zero Trust密钥 (License Key)"
     info "   a. 在浏览器中登录您的Cloudflare Zero Trust控制台。"
     info "   b. 导航至 'My Team' -> 'Devices'。"
     info "   c. 点击 'Connect a device' 按钮。"
@@ -109,10 +109,10 @@ get_zero_trust_config() {
         error "密钥不能为空。"
     fi
 
-    info "第 3 步: 将设备绑定到您的Zero Trust组织..."
+    info "步骤 2: 注册新设备并将其绑定到您的Zero Trust组织..."
     wgcf registration license --accept-tos --config "${WGCF_ACCOUNT_PATH}" "${ZERO_TRUST_LICENSE}"
     if [ $? -ne 0 ]; then
-        error "设备绑定失败！请检查您的密钥是否正确，以及Zero Trust的设备注册策略是否已正确配置。"
+        error "设备绑定失败！请检查您的密钥是否正确，以及Zero Trust的设备注册和登录策略是否已正确配置。"
     fi
 
     info "设备绑定成功！正在生成最终的WireGuard配置文件..."
@@ -165,11 +165,12 @@ patch_fscarmen_files() {
         local temp_json
         temp_json=$(mktemp)
         
+        # 使用 jq 稳健地更新JSON文件，保留其结构
         jq --arg pk "$WGCF_PrivateKey" \
            --arg v4 "$(echo $WGCF_AddressV4 | cut -d'/' -f1)" \
            --arg v6 "$(echo $WGCF_AddressV6 | cut -d'/' -f1)" \
            --arg ep "$WGCF_Endpoint" \
-           '.private_key = $pk | .config.interface.addresses.v4 = $v4 | .config.interface.addresses.v6 = $v6 | .config.peers[0].endpoint.host = $ep' \
+           '.private_key = $pk | .config.interface.addresses.v4 = $v4 | .config.interface.addresses.v6 = $v6 | .config.peers[0].endpoint.host = $ep | .account.account_type = "teams"' \
            "${FSCARMEN_ACCOUNT_DB}" > "${temp_json}" && mv "${temp_json}" "${FSCARMEN_ACCOUNT_DB}"
 
         info "'${FSCARMEN_ACCOUNT_DB}' 已修复。"
@@ -224,7 +225,7 @@ main() {
     echo
     warn "本脚本将引导您获取官方的Zero Trust账户配置，"
     warn "并将其应用到您现有的fscarmen安装中。"
-    warn "这将会覆盖您当前的WARP账户信息。"
+    warn "这将会【覆盖】您当前的WARP账户信息。"
     echo
     pause_for_user
     
