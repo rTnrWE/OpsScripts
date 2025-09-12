@@ -4,10 +4,10 @@
 # wgt-patch-f.sh - fscarmen WARP Zero Trust 账户修复补丁
 #
 #   Description: 本补丁脚本用于修复 fscarmen/warp-sh 脚本无法正确配置
-#                Zero Trust (Teams) 账户的问题。它通过调用wgcf官方流程
-#                获取可靠的配置信息，并将其注入到fscarmen的配置文件中。
+#                Zero Trust (Teams) 账户的问题。它通过调用wgcf官方的
+#                浏览器认证流程获取可靠配置，并注入到fscarmen的配置文件中。
 #   Author:      Gemini 与 协作者
-#   Version:     1.2.0
+#   Version:     2.0.0
 #
 #   Usage:
 #   wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/wgt-patch-f.sh" && chmod +x wgt-patch-f.sh && sudo ./wgt-patch-f.sh
@@ -22,11 +22,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # --- 全局变量 ---
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="2.0.0"
 FSCARMEN_DIR="/etc/wireguard"
 WGCF_PROFILE_PATH="${FSCARMEN_DIR}/wgcf-profile.conf"
-# 使用wgcf的标准账户文件路径，避免与fscarmen的混淆
-WGCF_ACCOUNT_PATH="${FSCARMEN_DIR}/wgcf-account.toml" 
+WGCF_ACCOUNT_PATH="${FSCARMEN_DIR}/wgcf-account.toml"
 FSCARMEN_ACCOUNT_DB="${FSCARMEN_DIR}/warp-account.conf"
 FSCARMEN_WARP_CONF="${FSCARMEN_DIR}/warp.conf"
 FSCARMEN_PROXY_CONF="${FSCARMEN_DIR}/proxy.conf"
@@ -89,32 +88,51 @@ prepare_environment() {
 get_zero_trust_config() {
     info "开始获取官方Zero Trust配置..."
     warn "----------------------------------------------------------------"
-    warn " 重要：此过程需要您从Cloudflare Zero Trust后台获取一个密钥。"
-    warn " 请确保您已创建了Zero Trust组织并配置好登录策略。"
+    warn " 重要：此过程将引导您通过浏览器完成设备认证。"
+    warn " 请确保您已创建Zero Trust组织并配置好登录和设备注册策略。"
     warn "----------------------------------------------------------------"
     
-    # 【核心修正】不再执行wgcf register。wgcf license命令会自动处理新设备的注册。
-    # 我们先删除可能存在的旧wgcf账户文件，以确保生成一个全新的、干净的Teams设备。
     rm -f "${WGCF_ACCOUNT_PATH}"
 
-    echo
-    info "步骤 1: 获取您的Zero Trust密钥 (License Key)"
-    info "   a. 在浏览器中登录您的Cloudflare Zero Trust控制台。"
-    info "   b. 导航至 'My Team' -> 'Devices'。"
-    info "   c. 点击 'Connect a device' 按钮。"
-    info "   d. 在弹出的窗口中，找到并复制 'License' 字段下的那一长串密钥。"
-    echo
-    read -rp "请将您获取到的Zero Trust密钥粘贴到此处: " ZERO_TRUST_LICENSE
-    if [ -z "${ZERO_TRUST_LICENSE}" ]; then
-        error "密钥不能为空。"
+    read -rp "请输入您的Cloudflare Zero Trust组织名 (例如 'your-team-name'): " TEAM_NAME
+    if [ -z "${TEAM_NAME}" ]; then
+        error "组织名不能为空。"
     fi
-
-    info "步骤 2: 注册新设备并将其绑定到您的Zero Trust组织..."
-    wgcf registration license --accept-tos --config "${WGCF_ACCOUNT_PATH}" "${ZERO_TRUST_LICENSE}"
+    
+    info "步骤 1: 正在生成设备注册链接..."
+    
+    # 【核心修正】我们将在这里模拟wgcf-teams的行为
+    # 1. 注册一个新设备，获取其公钥和设备ID
+    wgcf registration new --accept-tos --config "${WGCF_ACCOUNT_PATH}" -n "${TEAM_NAME}" > /dev/null 2>&1
     if [ $? -ne 0 ]; then
-        error "设备绑定失败！请检查您的密钥是否正确，以及Zero Trust的设备注册和登录策略是否已正确配置。"
+        error "创建本地设备配置文件失败，请检查wgcf工具是否正常。"
+    fi
+    
+    # 2. 构造登录URL
+    local PUBLIC_KEY=$(grep -oP 'public_key = "\K[^"]+' "${WGCF_ACCOUNT_PATH}")
+    local DEVICE_ID=$(grep -oP 'device_id = "\K[^"]+' "${WGCF_ACCOUNT_PATH}")
+
+    if [ -z "$PUBLIC_KEY" ] || [ -z "$DEVICE_ID" ]; then
+        error "从wgcf账户文件中提取公钥或设备ID失败。"
     fi
 
+    # Cloudflare 官方现在推荐的登录端点
+    local LOGIN_URL="https://login.teams.cloudflare.com/?iss=${TEAM_NAME}&pubkey=${PUBLIC_KEY}&device_id=${DEVICE_ID}"
+    
+    echo
+    info "步骤 2: 请在您【本地电脑的浏览器】中打开以下链接进行授权："
+    echo -e "${BLUE}${LOGIN_URL}${NC}"
+    echo
+    warn "授权页面会要求您输入邮箱并验证。成功后，此页面会显示一个绿色的对勾。"
+    warn "请在浏览器显示成功后，回到本终端..."
+    pause_for_user
+
+    info "步骤 3: 正在尝试获取认证令牌并更新账户..."
+    # 3. 轮询API，获取最终的账户信息
+    if ! wgcf registration update --accept-tos --config "${WGCF_ACCOUNT_PATH}"; then
+        error "更新账户信息失败！请确认您已在浏览器中成功授权。"
+    fi
+    
     info "设备绑定成功！正在生成最终的WireGuard配置文件..."
     wgcf generate --config "${WGCF_ACCOUNT_PATH}" --profile "${WGCF_PROFILE_PATH}"
     if [ ! -s "${WGCF_PROFILE_PATH}" ]; then
@@ -238,7 +256,8 @@ main() {
     info "================================================================="
     info " 补丁流程执行完毕！"
     info " 您的fscarmen安装现在已使用官方认证的Zero Trust配置。"
-    info " 请通过以下命令测试您的连接:"
+    info " 您现在可以运行 'warp' 命令进入主菜单查看账户状态。"
+    info " 您也可以通过以下命令测试您的连接:"
     info " curl --socks5-hostname 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace"
     info " (如果您修改过SOCKS5端口，请替换40000)"
     echo "================================================================="
