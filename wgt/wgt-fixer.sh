@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# ===================================================================================
+# ###################################################################################
 # wgt-fixer.sh - fscarmen WARP Zero Trust Manual Fix & Injection Script
 #
 # Description: This script allows you to manually input the correct Teams account
 #              details (fetched by fscarmen) to fix the configuration files that
 #              fail due to formatting issues from the API.
 # Author:      Gemini & Collaborator
-# Version:     4.0.1 (Syntax Corrected Final Version)
+# Version:     4.0.2 (Syntax Purified Version)
 #
 # Usage:
 # 1. Run 'warp a' from fscarmen, choose to change to Teams account via email.
@@ -15,7 +15,7 @@
 # 3. Abort the fscarmen script (press 'n' or Ctrl+C).
 # 4. Run this script:
 # rm -f wgt-fixer.sh && wget -N "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/wgt-fixer.sh" && chmod +x wgt-fixer.sh && sudo ./wgt-fixer.sh
-# ===================================================================================
+# ###################################################################################
 
 # --- 界面颜色 ---
 RED='\033[0;31m'
@@ -123,17 +123,27 @@ main() {
     
     # 3. 修复 warp-account.conf (JSON 数据库), 确保状态一致性
     if [ -f "${FSCARMEN_ACCOUNT_DB}" ]; then
-        local temp_json
-        temp_json=$(mktemp)
+        # 检查jq是否安装
+        if ! command -v jq &> /dev/null; then
+            warn "'jq' 命令未找到，正在尝试安装..."
+            apt-get update > /dev/null 2>&1 && apt-get install -y jq > /dev/null 2>&1
+            if ! command -v jq &> /dev/null; then
+                warn "自动安装 'jq' 失败，将跳过对 warp-account.conf 的修复。"
+            fi
+        fi
         
-        # 使用 jq 稳健地更新JSON文件，保留其结构
-        jq --arg pk "$PRIVATE_KEY" \
-           --arg v6 "$(echo "$ADDRESS_IPV6_CLEANED" | cut -d'/' -f1)" \
-           --arg cid "$CLIENT_ID" \
-           '.private_key = $pk | .config.interface.addresses.v6 = $v6 | .account.account_type = "teams" | .config.client_id = $cid' \
-           "${FSCARMEN_ACCOUNT_DB}" > "${temp_json}" && mv "${temp_json}" "${FSCARMEN_ACCOUNT_DB}"
-           
-        info "'${FSCARMEN_ACCOUNT_DB}' 已修复 (已标记为teams账户并更新密钥/ID)。"
+        if command -v jq &> /dev/null; then
+            local temp_json
+            temp_json=$(mktemp)
+            
+            jq --arg pk "$PRIVATE_KEY" \
+               --arg v6 "$(echo "$ADDRESS_IPV6_CLEANED" | cut -d'/' -f1)" \
+               --arg cid "$CLIENT_ID" \
+               '.private_key = $pk | .config.interface.addresses.v6 = $v6 | .account.account_type = "teams" | .config.client_id = $cid' \
+               "${FSCARMEN_ACCOUNT_DB}" > "${temp_json}" && mv "${temp_json}" "${FSCARMEN_ACCOUNT_DB}"
+               
+            info "'${FSCARMEN_ACCOUNT_DB}' 已修复 (已标记为teams账户并更新密钥/ID)。"
+        fi
     else
         warn "'${FSCARMEN_ACCOUNT_DB}' 未找到，跳过。"
     fi
