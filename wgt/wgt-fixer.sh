@@ -1,18 +1,26 @@
+
+---
+
+**`wgt-fixer.sh` 脚本完整代码:**
+
+```bash
 #!/bin/bash
 
 #====================================================================================
 # wgt-fixer.sh - fscarmen WARP Zero Trust Manual Fix & Injection Script
 #
 #   Description: This script allows you to manually input the correct Teams account
-#                details (fetched by fscarmen) to fix the configuration files.
+#                details (fetched by fscarmen) to fix the configuration files that
+#                fail due to formatting issues from the API.
 #   Author:      Gemini & Collaborator
-#   Version:     3.0.0 (Manual Injection Version)
+#   Version:     4.0.0 (Final Realistic Version)
 #
 #   Usage:
 #   1. Run 'warp a' from fscarmen, choose to change to Teams account via email.
 #   2. After browser auth, fscarmen will display the Key, IPv6, and Client ID. COPY these values.
 #   3. Abort the fscarmen script (press 'n' or Ctrl+C).
-#   4. Run this script: 'sudo ./wgt-fixer.sh' and PASTE the copied values.
+#   4. Run this script:
+#   rm -f wgt-fixer.sh && wget -N "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/wgt-fixer.sh" && chmod +x wgt-fixer.sh && sudo ./wgt-fixer.sh
 #
 #====================================================================================
 
@@ -59,11 +67,11 @@ main() {
     check_root
     check_fscarmen
     
-    warn "--------------------------- 操作流程 ---------------------------"
+    warn "--------------------------- 操作流程 (SOP) ---------------------------"
     warn "1. 请先运行 'warp a'，选择变更到Teams账户，并完成浏览器验证。"
-    warn "2. fscarmen脚本会显示出 [Private key], [Address IPv6], [Client id]。"
+    warn "2. fscarmen脚本会显示 [Private key], [Address IPv6], [Client id]。"
     warn "3. 请将这三项信息【准确地复制】下来。"
-    warn "4. 然后，【放弃】fscarmen的后续操作 (按 'n' 或 Ctrl+C)。"
+    warn "4. 然后，在确认环节【放弃】fscarmen的后续操作 (按 'n' 或 Ctrl+C)。"
     warn "5. 最后，在本脚本的引导下，将复制的信息粘贴进来。"
     warn "----------------------------------------------------------------"
     echo
@@ -100,24 +108,27 @@ main() {
     info "IPv6 地址清洗成功: ${ADDRESS_IPV6_CLEANED}"
 
     # --- 注入配置 ---
-    info "正在将干净的配置注入到fscarmen文件中..."
+    info "正在将干净的配置注入到fscarmen文件中 (只替换，不删除)..."
 
-    # 1. 修复 warp.conf
+    # 1. 修复 warp.conf (全局模式配置文件)
     if [ -f "${FSCARMEN_WARP_CONF}" ]; then
         sed -i "s#^PrivateKey = .*#PrivateKey = ${PRIVATE_KEY}#" "${FSCARMEN_WARP_CONF}"
         sed -i "s#^Address = 2606.*#Address = ${ADDRESS_IPV6_CLEANED}#" "${FSCARMEN_WARP_CONF}"
-        # 注意: Reserved 字段在 warp.conf 中通常是被注释的，我们不去动它
         info "'${FSCARMEN_WARP_CONF}' 已修复。"
+    else
+        warn "'${FSCARMEN_WARP_CONF}' 未找到，跳过。"
     fi
 
-    # 2. 修复 proxy.conf
+    # 2. 修复 proxy.conf (SOCKS5模式配置文件)
     if [ -f "${FSCARMEN_PROXY_CONF}" ]; then
         sed -i "s#^PrivateKey = .*#PrivateKey = ${PRIVATE_KEY}#" "${FSCARMEN_PROXY_CONF}"
         sed -i "s#^Address = 2606.*#Address = ${ADDRESS_IPV6_CLEANED}#" "${FSCARMEN_PROXY_CONF}"
         info "'${FSCARMEN_PROXY_CONF}' 已修复。"
+    else
+        warn "'${FSCARMEN_PROXY_CONF}' 未找到，跳过。"
     fi
     
-    # 3. 修复 warp-account.conf (JSON 数据库)
+    # 3. 修复 warp-account.conf (JSON 数据库), 确保状态一致性
     if [ -f "${FSCARMEN_ACCOUNT_DB}" ]; then
         local temp_json
         temp_json=$(mktemp)
@@ -128,29 +139,36 @@ main() {
            "${FSCARMEN_ACCOUNT_DB}" > "${temp_json}" && mv "${temp_json}" "${FSCARMEN_ACCOUNT_DB}"
            
         info "'${FSCARMEN_ACCOUNT_DB}' 已修复 (已标记为teams账户)。"
+    else
+        warn "'${FSCARMEN_ACCOUNT_DB}' 未找到，跳过。"
     fi
 
     info "所有配置文件已成功修复！"
     
     # --- 重启服务 ---
     info "正在重启 wireproxy 服务以应用新配置..."
+
+    # 重置systemd的失败计数器
+    systemctl reset-failed wireproxy.service 2>/dev/null
+
     if systemctl list-units --full -all | grep -q 'wireproxy.service'; then
         systemctl restart wireproxy.service
         sleep 2 # 等待服务启动
         if systemctl is-active --quiet wireproxy.service; then
-            info "wireproxy 服务已成功重启！"
+            info "wireproxy 服务已成功启动！"
         else
-            warn "wireproxy 服务重启失败，请手动运行 'systemctl status wireproxy.service' 检查错误。"
+            error "wireproxy 服务重启失败。请手动运行 'systemctl status wireproxy.service' 检查错误，并确认您的输入无误。"
         fi
     else
-        warn "未找到 wireproxy.service，请通过 'warp y' 手动启动。"
+        warn "未找到 wireproxy.service。请通过 'warp y' 手动启动。"
     fi
     
     echo
     info "================================================================="
     info " 修复流程执行完毕！"
-    info " 您现在可以运行 'warp' 命令进入主菜单查看账户状态是否已变为Teams。"
-    info "================================================================="
+    info " 您的fscarmen安装现在应该已成功切换到Zero Trust账户。"
+    info " 您可以运行 'warp' 命令进入主菜单查看账户状态。"
+    echo "================================================================="
 }
 
 # --- 脚本入口 ---
