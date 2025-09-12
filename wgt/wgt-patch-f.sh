@@ -7,7 +7,7 @@
 #                Zero Trust (Teams) 账户的问题。它通过调用wgcf官方的
 #                浏览器认证流程获取可靠配置，并注入到fscarmen的配置文件中。
 #   Author:      Gemini 与 协作者
-#   Version:     2.0.0
+#   Version:     2.0.1
 #
 #   Usage:
 #   wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/wgt-patch-f.sh" && chmod +x wgt-patch-f.sh && sudo ./wgt-patch-f.sh
@@ -22,10 +22,11 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # --- 全局变量 ---
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.0.1"
 FSCARMEN_DIR="/etc/wireguard"
 WGCF_PROFILE_PATH="${FSCARMEN_DIR}/wgcf-profile.conf"
-WGCF_ACCOUNT_PATH="${FSCARMEN_DIR}/wgcf-account.toml"
+# 使用wgcf的标准账户文件路径，避免与fscarmen的混淆
+WGCF_ACCOUNT_PATH="${FSCARMEN_DIR}/wgcf-account.toml" 
 FSCARMEN_ACCOUNT_DB="${FSCARMEN_DIR}/warp-account.conf"
 FSCARMEN_WARP_CONF="${FSCARMEN_DIR}/warp.conf"
 FSCARMEN_PROXY_CONF="${FSCARMEN_DIR}/proxy.conf"
@@ -92,6 +93,8 @@ get_zero_trust_config() {
     warn " 请确保您已创建Zero Trust组织并配置好登录和设备注册策略。"
     warn "----------------------------------------------------------------"
     
+    # 【核心修正 V2.0.1】强制清理旧的wgcf账户文件，确保从干净状态开始。
+    info "正在清理可能存在的旧配置文件以避免冲突..."
     rm -f "${WGCF_ACCOUNT_PATH}"
 
     read -rp "请输入您的Cloudflare Zero Trust组织名 (例如 'your-team-name'): " TEAM_NAME
@@ -101,11 +104,10 @@ get_zero_trust_config() {
     
     info "步骤 1: 正在生成设备注册链接..."
     
-    # 【核心修正】我们将在这里模拟wgcf-teams的行为
     # 1. 注册一个新设备，获取其公钥和设备ID
     wgcf registration new --accept-tos --config "${WGCF_ACCOUNT_PATH}" -n "${TEAM_NAME}" > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        error "创建本地设备配置文件失败，请检查wgcf工具是否正常。"
+    if [ $? -ne 0 ] || [ ! -s "${WGCF_ACCOUNT_PATH}" ]; then
+        error "创建本地设备配置文件失败！这可能是由于wgcf工具的临时问题或网络错误。请稍后重试。"
     fi
     
     # 2. 构造登录URL
@@ -115,8 +117,7 @@ get_zero_trust_config() {
     if [ -z "$PUBLIC_KEY" ] || [ -z "$DEVICE_ID" ]; then
         error "从wgcf账户文件中提取公钥或设备ID失败。"
     fi
-
-    # Cloudflare 官方现在推荐的登录端点
+    
     local LOGIN_URL="https://login.teams.cloudflare.com/?iss=${TEAM_NAME}&pubkey=${PUBLIC_KEY}&device_id=${DEVICE_ID}"
     
     echo
