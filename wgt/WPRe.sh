@@ -1,180 +1,174 @@
 #!/bin/bash
 
-# ###################################################################################
-# wgt-fixer.sh - fscarmen WARP Zero Trust Manual Fix & Injection Script
+#====================================================================================
+# WPRe.sh - WireProxy IP Refresher
 #
-# Description: This script allows you to manually input the correct Teams account
-#              details (fetched by fscarmen) to fix the configuration files that
-#              fail due to formatting issues from the API.
-# Author:      Gemini & Collaborator
-# Version:     4.0.2 (Syntax Purified Version)
+#   Description: Reliably refreshes the WireProxy SOCKS5 exit IP for installations
+#                managed by the fscarmen/warp script.
+#   Usage:
+#   wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/WPRe.sh" && chmod +x WPRe.sh && ./WPRe.sh
 #
-# Usage:
-# 1. Run 'warp a' from fscarmen, choose to change to Teams account via email.
-# 2. After browser auth, fscarmen will display the Key, IPv6, and Client ID. COPY these values.
-# 3. Abort the fscarmen script (press 'n' or Ctrl+C).
-# 4. Run this script:
-# rm -f wgt-fixer.sh && wget -N "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/wgt-fixer.sh" && chmod +x wgt-fixer.sh && sudo ./wgt-fixer.sh
-# ###################################################################################
+#====================================================================================
 
-# --- 界面颜色 ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# --- Script Configuration ---
+# The configuration file for WireProxy.
+readonly WARP_CONFIG_PATH="/etc/wireguard/proxy.conf"
+# The domain WireProxy uses to find Cloudflare endpoints.
+readonly WARP_ENDPOINT_DOMAIN="engage.cloudflareclient.com"
+# The path to the fscarmen script.
+readonly FSCARMEN_SCRIPT_PATH="./menu.sh"
 
-# --- 全局变量 ---
-FSCARMEN_DIR="/etc/wireguard"
-FSCARMEN_ACCOUNT_DB="${FSCARMEN_DIR}/warp-account.conf"
-FSCARMEN_WARP_CONF="${FSCARMEN_DIR}/warp.conf"
-FSCARMEN_PROXY_CONF="${FSCARMEN_DIR}/proxy.conf"
+# --- Colors for Output ---
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[0;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
 
-# --- 工具函数 ---
-info() { echo -e "${GREEN}[信息] $*${NC}"; }
-warn() { echo -e "${YELLOW}[警告] $*${NC}"; }
-error() { echo -e "${RED}[错误] $*${NC}"; exit 1; }
-
+# --- Utility Functions ---
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        error "本脚本必须以root权限运行，请使用 'sudo ./wgt-fixer.sh'。"
+        echo -e "${RED}错误: 此脚本必须以root用户权限运行。${NC}"
+        exit 1
     fi
 }
 
-check_fscarmen() {
-    if [ ! -f "${FSCARMEN_DIR}/menu.sh" ]; then
-        error "在 '${FSCARMEN_DIR}/menu.sh' 未找到fscarmen/warp-sh脚本，请先安装主脚本。"
+check_dependencies() {
+    local missing_deps=()
+    for cmd in curl wget sed; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing_deps+=("$cmd")
+        fi
+    done
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo -e "${RED}错误: 缺少核心依赖: ${missing_deps[*]}${NC}"
+        echo -e "${YELLOW}请运行 'apt update && apt install -y ${missing_deps[*]}' 来安装它们。${NC}"
+        exit 1
     fi
-    info "检测到fscarmen/warp-sh已安装。"
+
+    if [ ! -f "${FSCARMEN_SCRIPT_PATH}" ]; then
+        echo -e "${RED}错误: 未在当前目录找到 'menu.sh' 脚本。${NC}"
+        echo -e "${YELLOW}正在尝试自动下载...${NC}"
+        wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh > /dev/null 2>&1
+        if [ $? -ne 0 ] || [ ! -f "${FSCARMEN_SCRIPT_PATH}" ]; then
+            echo -e "${RED}自动下载 'menu.sh' 失败。请手动下载后重试。${NC}"
+            exit 1
+        fi
+        chmod +x ${FSCARMEN_SCRIPT_PATH}
+        echo -e "${GREEN}'menu.sh' 已成功下载。${NC}"
+    fi
 }
 
-# --- 核心逻辑 ---
+# --- Core Functions ---
+
+get_socks_port() {
+    if [ ! -f "${WARP_CONFIG_PATH}" ]; then
+        echo -e "${RED}错误: 找不到WARP配置文件: ${WARP_CONFIG_PATH}${NC}"
+        return 1
+    fi
+    # Using a more compatible way to extract the port number
+    SOCKS_PORT=$(grep "BindAddress" "${WARP_CONFIG_PATH}" | awk -F':' '{print $2}' | tr -d ' ')
+    if ! [[ "${SOCKS_PORT}" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}错误: 无法从配置文件中自动检测SOCKS5端口。${NC}"
+        return 1
+    fi
+    echo "${SOCKS_PORT}"
+}
+
+get_current_warp_ip() {
+    local port=$1
+    echo -e "${BLUE}>>> 正在检测当前的WARP出口IP...${NC}"
+    CURRENT_IP=$(curl -s --max-time 10 --proxy "socks5h://127.0.0.1:${port}" ip.sb)
+    if [ -z "${CURRENT_IP}" ]; then
+        echo -e "${RED}无法获取当前的出口IP。请检查WireProxy服务是否正在运行。${NC}"
+        echo -e "${YELLOW}您可以尝试手动运行 './menu.sh' 并选择 'y' 选项来重启服务。${NC}"
+        return 1
+    fi
+    echo -e "当前的出口IP是: ${GREEN}${CURRENT_IP}${NC}"
+}
+
+flip_the_ip() {
+    local port=$1
+    echo -e "\n${YELLOW}--- 开始执行强制IP刷新 ---${NC}"
+
+    # 1. 劫持域名解析
+    echo -e "${BLUE}[1/5] 正在通过 /etc/hosts 临时劫持域名...${NC}"
+    # Clean up any previous stale entries first
+    sed -i "/${WARP_ENDPOINT_DOMAIN}/d" /etc/hosts
+    echo "127.0.0.1 ${WARP_ENDPOINT_DOMAIN}" >> /etc/hosts
+
+    # 2. 尝试重启wireproxy，此时它会因为域名被劫持而连接失败
+    echo -e "${BLUE}[2/5] 第一次重启服务 (预期会失败，以重置状态)...${NC}"
+    echo "y" | ${FSCARMEN_SCRIPT_PATH} > /dev/null 2>&1
+    sleep 5
+
+    # 3. 恢复域名解析
+    echo -e "${BLUE}[3/5] 正在恢复正常的域名解析...${NC}"
+    sed -i "/${WARP_ENDPOINT_DOMAIN}/d" /etc/hosts
+
+    # --- Verification Step ---
+    if grep -q "${WARP_ENDPOINT_DOMAIN}" /etc/hosts; then
+        echo -e "${RED}严重错误: 无法从 /etc/hosts 文件中移除劫持条目！${NC}"
+        echo -e "${YELLOW}为避免网络问题，脚本将终止。请手动编辑 /etc/hosts 文件并删除包含 '${WARP_ENDPOINT_DOMAIN}' 的行。${NC}"
+        exit 1
+    fi
+
+    # 4. 再次重启wireproxy，现在它可以正常解析并获取新的Endpoint了
+    echo -e "${BLUE}[4/5] 第二次重启服务 (获取新IP)...${NC}"
+    echo "y" | ${FSCARMEN_SCRIPT_PATH} > /dev/null 2>&1
+
+    # 5. 最终验证
+    echo -e "${BLUE}[5/5] 等待服务稳定并检查新IP...${NC}"
+    sleep 8 # Wait a bit longer for the service to fully stabilize
+    NEW_IP=$(curl -s --max-time 15 --proxy "socks5h://127.0.0.1:${port}" ip.sb)
+
+    echo -e "\n${GREEN}--- IP刷新操作完成 ---${NC}"
+    if [ -n "${NEW_IP}" ]; then
+        if [ "${NEW_IP}" != "${CURRENT_IP}" ]; then
+            echo -e "恭喜！您的WARP出口IP已成功更换！"
+            echo -e "旧IP: ${RED}${CURRENT_IP}${NC}"
+            echo -e "新IP: ${GREEN}${NEW_IP}${NC}"
+        else
+            echo -e "${YELLOW}操作完成，但IP没有变化。可能是Cloudflare分配了相同的IP。${NC}"
+            echo -e "您可以稍后重试。当前IP: ${GREEN}${NEW_IP}${NC}"
+        fi
+    else
+        echo -e "${RED}操作失败！无法获取新的出口IP。${NC}"
+        echo -e "${YELLOW}请尝试手动运行 './menu.sh' 并选择 'y' 来重启服务进行排错。${NC}"
+    fi
+}
+
+# --- Script Entrypoint ---
 
 main() {
     clear
-    echo "================================================================="
-    echo "  wgt-fixer.sh - fscarmen WARP Zero Trust 手动修复注入脚本"
-    echo "================================================================="
-    echo
-    
+    echo "-------------- WPRe.sh (WARP IP Refresher) --------------"
+    echo "        - 专为 fscarmen/warp 的WireProxy设计 -"
+    echo ""
+
     check_root
-    check_fscarmen
+    check_dependencies
+
+    SOCKS_PORT=$(get_socks_port)
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
+    echo -e "${BLUE}成功检测到SOCKS5端口: ${GREEN}${SOCKS_PORT}${NC}\n"
+
+    get_current_warp_ip "${SOCKS_PORT}"
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
     
-    warn "--------------------------- 操作流程 (SOP) ---------------------------"
-    warn "1. 请先运行 'warp a'，选择变更到Teams账户，并完成浏览器验证。"
-    warn "2. fscarmen脚本会显示 [Private key], [Address IPv6], [Client id]。"
-    warn "3. 请将这三项信息【准确地复制】下来。"
-    warn "4. 然后，在确认环节【放弃】fscarmen的后续操作 (按 'n' 或 Ctrl+C)。"
-    warn "5. 最后，在本脚本的引导下，将复制的信息粘贴进来。"
-    warn "----------------------------------------------------------------"
-    echo
-    read -rp "您理解并准备好开始了吗? [Y/n]: " confirm
-    if [[ "${confirm}" =~ ^[nN]$ ]]; then
+    echo ""
+    read -rp "您想现在强制刷新这个IP吗? [y/N]: " confirm
+    if [[ "${confirm}" =~ ^[yY]$ ]]; then
+        flip_the_ip "${SOCKS_PORT}"
+    else
         echo "操作已取消。"
-        exit 0
-    fi
-
-    # --- 获取用户输入 ---
-    echo
-    info "--- 步骤 1: 请粘贴 Private key ---"
-    read -rp "Private key: " PRIVATE_KEY
-    if [ -z "${PRIVATE_KEY}" ]; then error "Private key 不能为空。"; fi
-
-    echo
-    info "--- 步骤 2: 请粘贴 Address IPv6 ---"
-    info "(请粘贴fscarmen显示的那串完整的、带有[]和:0/128的地址)"
-    read -rp "Address IPv6: " ADDRESS_IPV6_RAW
-    if [ -z "${ADDRESS_IPV6_RAW}" ]; then error "Address IPv6 不能为空。"; fi
-
-    echo
-    info "--- 步骤 3: 请粘贴 Client id ---"
-    read -rp "Client id: " CLIENT_ID
-    if [ -z "${CLIENT_ID}" ]; then error "Client id 不能为空。"; fi
-
-    # --- 数据清洗 ---
-    info "正在清洗数据..."
-    local ADDRESS_IPV6_CLEANED
-    ADDRESS_IPV6_CLEANED=$(echo "${ADDRESS_IPV6_RAW}" | sed -E 's/\[([^]]+)\].*/\1\/128/')
-    if ! [[ "${ADDRESS_IPV6_CLEANED}" =~ ^[0-9a-fA-F:]+\/128$ ]]; then
-        error "无法从您输入的IPv6地址中提取出有效格式，请检查输入。"
-    fi
-    info "IPv6 地址清洗成功: ${ADDRESS_IPV6_CLEANED}"
-
-    # --- 注入配置 ---
-    info "正在将干净的配置注入到fscarmen文件中 (只替换，不删除)..."
-
-    # 1. 修复 warp.conf (全局模式配置文件)
-    if [ -f "${FSCARMEN_WARP_CONF}" ]; then
-        sed -i "s#^PrivateKey = .*#PrivateKey = ${PRIVATE_KEY}#" "${FSCARMEN_WARP_CONF}"
-        sed -i "s#^Address = 2606.*#Address = ${ADDRESS_IPV6_CLEANED}#" "${FSCARMEN_WARP_CONF}"
-        info "'${FSCARMEN_WARP_CONF}' 已修复。"
-    else
-        warn "'${FSCARMEN_WARP_CONF}' 未找到，跳过。"
-    fi
-
-    # 2. 修复 proxy.conf (SOCKS5模式配置文件)
-    if [ -f "${FSCARMEN_PROXY_CONF}" ]; then
-        sed -i "s#^PrivateKey = .*#PrivateKey = ${PRIVATE_KEY}#" "${FSCARMEN_PROXY_CONF}"
-        sed -i "s#^Address = 2606.*#Address = ${ADDRESS_IPV6_CLEANED}#" "${FSCARMEN_PROXY_CONF}"
-        info "'${FSCARMEN_PROXY_CONF}' 已修复。"
-    else
-        warn "'${FSCARMEN_PROXY_CONF}' 未找到，跳过。"
     fi
     
-    # 3. 修复 warp-account.conf (JSON 数据库), 确保状态一致性
-    if [ -f "${FSCARMEN_ACCOUNT_DB}" ]; then
-        # 检查jq是否安装
-        if ! command -v jq &> /dev/null; then
-            warn "'jq' 命令未找到，正在尝试安装..."
-            apt-get update > /dev/null 2>&1 && apt-get install -y jq > /dev/null 2>&1
-            if ! command -v jq &> /dev/null; then
-                warn "自动安装 'jq' 失败，将跳过对 warp-account.conf 的修复。"
-            fi
-        fi
-        
-        if command -v jq &> /dev/null; then
-            local temp_json
-            temp_json=$(mktemp)
-            
-            jq --arg pk "$PRIVATE_KEY" \
-               --arg v6 "$(echo "$ADDRESS_IPV6_CLEANED" | cut -d'/' -f1)" \
-               --arg cid "$CLIENT_ID" \
-               '.private_key = $pk | .config.interface.addresses.v6 = $v6 | .account.account_type = "teams" | .config.client_id = $cid' \
-               "${FSCARMEN_ACCOUNT_DB}" > "${temp_json}" && mv "${temp_json}" "${FSCARMEN_ACCOUNT_DB}"
-               
-            info "'${FSCARMEN_ACCOUNT_DB}' 已修复 (已标记为teams账户并更新密钥/ID)。"
-        fi
-    else
-        warn "'${FSCARMEN_ACCOUNT_DB}' 未找到，跳过。"
-    fi
-
-    info "所有配置文件已成功修复！"
-    
-    # --- 重启服务 ---
-    info "正在重启 wireproxy 服务以应用新配置..."
-
-    # 重置systemd的失败计数器
-    systemctl reset-failed wireproxy.service 2>/dev/null
-
-    if systemctl list-units --full -all | grep -q 'wireproxy.service'; then
-        systemctl restart wireproxy.service
-        sleep 2 # 等待服务启动
-        if systemctl is-active --quiet wireproxy.service; then
-            info "wireproxy 服务已成功启动！"
-        else
-            error "wireproxy 服务重启失败。请手动运行 'systemctl status wireproxy.service' 检查错误，并确认您的输入无误。"
-        fi
-    else
-        warn "未找到 wireproxy.service。请通过 'warp y' 手动启动。"
-    fi
-    
-    echo
-    info "================================================================="
-    info " 修复流程执行完毕！"
-    info " 您的fscarmen安装现在应该已成功切换到Zero Trust账户。"
-    info " 您可以运行 'warp' 命令进入主菜单查看账户状态。"
-    echo "================================================================="
+    echo -e "\n脚本执行完毕。"
 }
 
-# --- 脚本入口 ---
 main
