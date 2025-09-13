@@ -17,6 +17,7 @@ set -e
 readonly WARP_CONFIG_PATH="/etc/wireguard/proxy.conf"
 readonly WARP_ENDPOINT_DOMAIN="engage.cloudflareclient.com"
 readonly FSCARMEN_SCRIPT_PATH="/etc/wireguard/menu.sh"
+readonly WIREPROXY_SERVICE_NAME="wireproxy.service"
 
 # --- Colors for Output ---
 readonly RED='\033[0;31m'
@@ -39,7 +40,7 @@ check_root() {
 
 check_dependencies() {
     local missing_deps=()
-    for cmd in curl wget sed awk; do
+    for cmd in curl wget sed awk systemctl; do
         if ! command -v "$cmd" &> /dev/null; then
             missing_deps+=("$cmd")
         fi
@@ -82,7 +83,7 @@ get_current_warp_ip() {
 
     if [[ "${CURRENT_IP_V4}" == "不可用" && "${CURRENT_IP_V6}" == "不可用" ]]; then
         echo -e "${RED}无法获取任何出口IP。请检查WireProxy服务是否正在运行。${NC}"
-        echo -e "${YELLOW}您可以尝试手动运行 '${FSCARMEN_SCRIPT_PATH}' 并选择 'y' 选项来重启服务。${NC}"
+        echo -e "${YELLOW}您可以尝试手动运行 'systemctl restart ${WIRELOCK_SERVICE_NAME}'。${NC}"
         exit 1
     fi
     echo -e "当前的IPv4出口是: ${GREEN}${CURRENT_IP_V4}${NC}"
@@ -98,9 +99,9 @@ flip_the_ip() {
     sed -i.bak "/${WARP_ENDPOINT_DOMAIN}/d" /etc/hosts
     echo "127.0.0.1 ${WARP_ENDPOINT_DOMAIN}" >> /etc/hosts
 
-    # 2. Restart service (expected to fail)
+    # 2. Restart service (expected to fail) using systemctl
     echo -e "${BLUE}[2/5] 第一次重启服务 (以重置状态)...${NC}"
-    echo "y" | ${FSCARMEN_SCRIPT_PATH} > /dev/null 2>&1
+    systemctl restart "${WIREPROXY_SERVICE_NAME}"
     sleep 5
 
     # 3. Restore domain resolution
@@ -113,9 +114,9 @@ flip_the_ip() {
     fi
     rm -f /etc/hosts.bak
 
-    # 4. Restart service again (to get new IP)
+    # 4. Restart service again (to get new IP) using systemctl
     echo -e "${BLUE}[4/5] 第二次重启服务 (获取新IP)...${NC}"
-    echo "y" | ${FSCARMEN_SCRIPT_PATH} > /dev/null 2>&1
+    systemctl restart "${WIREPROXY_SERVICE_NAME}"
 
     # 5. Final validation
     echo -e "${BLUE}[5/5] 等待服务稳定并检查新双栈IP...${NC}"
