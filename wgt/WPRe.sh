@@ -6,7 +6,7 @@
 #   Description: Reliably refreshes the WireProxy SOCKS5 exit IP for installations
 #                managed by the fscarmen/warp script.
 #   Usage:
-#   wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/WPRe.sh" && chmod +x WPRe.sh && ./WPRe.sh
+#   wget --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/wgt/WPRe.sh" -O WPRe.sh && chmod +x WPRe.sh && ./WPRe.sh
 #
 #====================================================================================
 
@@ -15,8 +15,8 @@
 readonly WARP_CONFIG_PATH="/etc/wireguard/proxy.conf"
 # The domain WireProxy uses to find Cloudflare endpoints.
 readonly WARP_ENDPOINT_DOMAIN="engage.cloudflareclient.com"
-# The path to the fscarmen script.
-readonly FSCARMEN_SCRIPT_PATH="./menu.sh"
+# The absolute path to the fscarmen script.
+readonly FSCARMEN_SCRIPT_PATH="/etc/wireguard/menu.sh"
 
 # --- Colors for Output ---
 readonly RED='\033[0;31m'
@@ -47,15 +47,9 @@ check_dependencies() {
     fi
 
     if [ ! -f "${FSCARMEN_SCRIPT_PATH}" ]; then
-        echo -e "${RED}错误: 未在当前目录找到 'menu.sh' 脚本。${NC}"
-        echo -e "${YELLOW}正在尝试自动下载...${NC}"
-        wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh > /dev/null 2>&1
-        if [ $? -ne 0 ] || [ ! -f "${FSCARMEN_SCRIPT_PATH}" ]; then
-            echo -e "${RED}自动下载 'menu.sh' 失败。请手动下载后重试。${NC}"
-            exit 1
-        fi
-        chmod +x ${FSCARMEN_SCRIPT_PATH}
-        echo -e "${GREEN}'menu.sh' 已成功下载。${NC}"
+        echo -e "${RED}错误: 未找到 fscarmen 脚本: ${FSCARMEN_SCRIPT_PATH}${NC}"
+        echo -e "${YELLOW}请确保您已经通过 fscarmen/warp 脚本成功安装了 WireProxy。${NC}"
+        exit 1
     fi
 }
 
@@ -81,7 +75,7 @@ get_current_warp_ip() {
     CURRENT_IP=$(curl -s --max-time 10 --proxy "socks5h://127.0.0.1:${port}" ip.sb)
     if [ -z "${CURRENT_IP}" ]; then
         echo -e "${RED}无法获取当前的出口IP。请检查WireProxy服务是否正在运行。${NC}"
-        echo -e "${YELLOW}您可以尝试手动运行 './menu.sh' 并选择 'y' 选项来重启服务。${NC}"
+        echo -e "${YELLOW}您可以尝试手动运行 '${FSCARMEN_SCRIPT_PATH}' 并选择 'y' 选项来重启服务。${NC}"
         return 1
     fi
     echo -e "当前的出口IP是: ${GREEN}${CURRENT_IP}${NC}"
@@ -134,7 +128,7 @@ flip_the_ip() {
         fi
     else
         echo -e "${RED}操作失败！无法获取新的出口IP。${NC}"
-        echo -e "${YELLOW}请尝试手动运行 './menu.sh' 并选择 'y' 来重启服务进行排错。${NC}"
+        echo -e "${YELLOW}请尝试手动运行 '${FSCARMEN_SCRIPT_PATH}' 并选择 'y' 来重启服务进行排错。${NC}"
     fi
 }
 
@@ -171,4 +165,4 @@ main() {
     echo -e "\n脚本执行完毕。"
 }
 
-main
+main```
