@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #====================================================================================
-# WPRe.sh - WireProxy IP Refresher
+# WPRe.sh - WireProxy IP Refresher (Dual Stack IPv4/IPv6)
 #
 #   Description: Reliably refreshes the WireProxy SOCKS5 exit IP for installations
 #                managed by the fscarmen/warp script.
@@ -14,11 +14,8 @@
 set -e
 
 # --- Script Configuration ---
-# The configuration file for WireProxy.
 readonly WARP_CONFIG_PATH="/etc/wireguard/proxy.conf"
-# The domain WireProxy uses to find Cloudflare endpoints.
 readonly WARP_ENDPOINT_DOMAIN="engage.cloudflareclient.com"
-# The absolute path to the fscarmen script.
 readonly FSCARMEN_SCRIPT_PATH="/etc/wireguard/menu.sh"
 
 # --- Colors for Output ---
@@ -27,6 +24,10 @@ readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[0;33m'
 readonly BLUE='\033[0;34m'
 readonly NC='\033[0m' # No Color
+
+# --- Global Variables for IP storage ---
+CURRENT_IP_V4=""
+CURRENT_IP_V6=""
 
 # --- Utility Functions ---
 check_root() {
@@ -38,7 +39,7 @@ check_root() {
 
 check_dependencies() {
     local missing_deps=()
-    for cmd in curl wget sed; do
+    for cmd in curl wget sed awk; do
         if ! command -v "$cmd" &> /dev/null; then
             missing_deps+=("$cmd")
         fi
@@ -63,10 +64,10 @@ get_socks_port() {
         echo -e "${RED}错误: 找不到WARP配置文件: ${WARP_CONFIG_PATH}${NC}"
         exit 1
     fi
-    # Robustly extract the port number
-    SOCKS_PORT=$(grep "BindAddress" "${WARP_CONFIG_PATH}" | awk -F':' '{print $2}' | tr -d '[:space:]')
+    SOCKS_PORT=$(awk '/^\[Socks5\]/{f=1} f && /BindAddress/{split($3, a, ":"); print a[2]; exit}' "${WARP_CONFIG_PATH}")
+
     if ! [[ "${SOCKS_PORT}" =~ ^[0-9]+$ ]]; then
-        echo -e "${RED}错误: 无法从配置文件中自动检测SOCKS5端口。${NC}"
+        echo -e "${RED}错误: 无法从配置文件的 [Socks5] 部分自动检测SOCKS5端口。${NC}"
         exit 1
     fi
     echo "${SOCKS_PORT}"
@@ -74,19 +75,22 @@ get_socks_port() {
 
 get_current_warp_ip() {
     local port=$1
-    echo -e "${BLUE}>>> 正在检测当前的WARP出口IP...${NC}"
-    CURRENT_IP=$(curl -s --max-time 10 --proxy "socks5h://127.0.0.1:${port}" ip.sb)
-    if [ -z "${CURRENT_IP}" ]; then
-        echo -e "${RED}无法获取当前的出口IP。请检查WireProxy服务是否正在运行。${NC}"
+    echo -e "${BLUE}>>> 正在检测当前的WARP双栈出口IP...${NC}"
+    
+    CURRENT_IP_V4=$(curl -s -4 --max-time 10 --proxy "socks5h://127.0.0.1:${port}" ip.sb || echo "不可用")
+    CURRENT_IP_V6=$(curl -s -6 --max-time 10 --proxy "socks5h://127.0.0.1:${port}" ip.sb || echo "不可用")
+
+    if [[ "${CURRENT_IP_V4}" == "不可用" && "${CURRENT_IP_V6}" == "不可用" ]]; then
+        echo -e "${RED}无法获取任何出口IP。请检查WireProxy服务是否正在运行。${NC}"
         echo -e "${YELLOW}您可以尝试手动运行 '${FSCARMEN_SCRIPT_PATH}' 并选择 'y' 选项来重启服务。${NC}"
         exit 1
     fi
-    echo -e "当前的出口IP是: ${GREEN}${CURRENT_IP}${NC}"
+    echo -e "当前的IPv4出口是: ${GREEN}${CURRENT_IP_V4}${NC}"
+    echo -e "当前的IPv6出口是: ${GREEN}${CURRENT_IP_V6}${NC}"
 }
 
 flip_the_ip() {
     local port=$1
-    local current_ip=$2
     echo -e "\n${YELLOW}--- 开始执行强制IP刷新 ---${NC}"
 
     # 1. Hijack domain resolution
@@ -102,12 +106,9 @@ flip_the_ip() {
     # 3. Restore domain resolution
     echo -e "${BLUE}[3/5] 正在恢复正常的域名解析...${NC}"
     sed -i "/${WARP_ENDPOINT_DOMAIN}/d" /etc/hosts
-
-    # --- Verification Step ---
     if grep -q "${WARP_ENDPOINT_DOMAIN}" /etc/hosts; then
         echo -e "${RED}严重错误: 无法从 /etc/hosts 文件中移除劫持条目！${NC}"
-        echo -e "${YELLOW}为避免网络问题，脚本将终止。请手动编辑 /etc/hosts 并删除相关行。${NC}"
-        mv /etc/hosts.bak /etc/hosts # Restore from backup
+        mv /etc/hosts.bak /etc/hosts
         exit 1
     fi
     rm -f /etc/hosts.bak
@@ -117,28 +118,28 @@ flip_the_ip() {
     echo "y" | ${FSCARMEN_SCRIPT_PATH} > /dev/null 2>&1
 
     # 5. Final validation
-    echo -e "${BLUE}[5/5] 等待服务稳定并检查新IP...${NC}"
+    echo -e "${BLUE}[5/5] 等待服务稳定并检查新双栈IP...${NC}"
     sleep 8
-    NEW_IP=$(curl -s --max-time 15 --proxy "socks5h://127.0.0.1:${port}" ip.sb)
+    NEW_IP_V4=$(curl -s -4 --max-time 15 --proxy "socks5h://127.0.0.1:${port}" ip.sb || echo "不可用")
+    NEW_IP_V6=$(curl -s -6 --max-time 15 --proxy "socks5h://127.0.0.1:${port}" ip.sb || echo "不可用")
 
     echo -e "\n${GREEN}--- IP刷新操作完成 ---${NC}"
-    if [ -n "${NEW_IP}" ]; then
-        if [ "${NEW_IP}" != "${current_ip}" ]; then
+    if [[ "${NEW_IP_V4}" == "不可用" && "${NEW_IP_V6}" == "不可用" ]]; then
+        echo -e "${RED}操作失败！无法获取任何新的出口IP。${NC}"
+    else
+        if [[ "${NEW_IP_V4}" != "${CURRENT_IP_V4}" || "${NEW_IP_V6}" != "${CURRENT_IP_V6}" ]]; then
             echo -e "恭喜！您的WARP出口IP已成功更换！"
-            echo -e "旧IP: ${RED}${current_ip}${NC}"
-            echo -e "新IP: ${GREEN}${NEW_IP}${NC}"
+            echo -e "旧IPv4: ${RED}${CURRENT_IP_V4}${NC} -> 新IPv4: ${GREEN}${NEW_IP_V4}${NC}"
+            echo -e "旧IPv6: ${RED}${CURRENT_IP_V6}${NC} -> 新IPv6: ${GREEN}${NEW_IP_V6}${NC}"
         else
             echo -e "${YELLOW}操作完成，但IP没有变化。可能是Cloudflare分配了相同的IP。${NC}"
-            echo -e "您可以稍后重试。当前IP: ${GREEN}${NEW_IP}${NC}"
+            echo -e "当前IPv4: ${GREEN}${NEW_IP_V4}${NC}"
+            echo -e "当前IPv6: ${GREEN}${NEW_IP_V6}${NC}"
         fi
-    else
-        echo -e "${RED}操作失败！无法获取新的出口IP。${NC}"
-        echo -e "${YELLOW}请尝试手动运行 '${FSCARMEN_SCRIPT_PATH}' 并选择 'y' 来重启服务进行排错。${NC}"
     fi
 }
 
 # --- Script Entrypoint ---
-
 main() {
     clear
     echo "-------------- WPRe.sh (WARP IP Refresher) --------------"
@@ -152,13 +153,12 @@ main() {
     socks_port=$(get_socks_port)
     echo -e "${BLUE}成功检测到SOCKS5端口: ${GREEN}${socks_port}${NC}\n"
 
-    local current_ip
-    current_ip=$(get_current_warp_ip "${socks_port}")
+    get_current_warp_ip "${socks_port}"
     
     echo ""
     read -rp "您想现在强制刷新这个IP吗? [y/N]: " confirm
     if [[ "${confirm}" =~ ^[yY]$ ]]; then
-        flip_the_ip "${socks_port}" "${current_ip}"
+        flip_the_ip "${socks_port}"
     else
         echo "操作已取消。"
     fi
