@@ -10,6 +10,9 @@
 #
 #====================================================================================
 
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
 # --- Script Configuration ---
 # The configuration file for WireProxy.
 readonly WARP_CONFIG_PATH="/etc/wireguard/proxy.conf"
@@ -58,13 +61,13 @@ check_dependencies() {
 get_socks_port() {
     if [ ! -f "${WARP_CONFIG_PATH}" ]; then
         echo -e "${RED}错误: 找不到WARP配置文件: ${WARP_CONFIG_PATH}${NC}"
-        return 1
+        exit 1
     fi
-    # Using a more compatible way to extract the port number
-    SOCKS_PORT=$(grep "BindAddress" "${WARP_CONFIG_PATH}" | awk -F':' '{print $2}' | tr -d ' ')
+    # Robustly extract the port number
+    SOCKS_PORT=$(grep "BindAddress" "${WARP_CONFIG_PATH}" | awk -F':' '{print $2}' | tr -d '[:space:]')
     if ! [[ "${SOCKS_PORT}" =~ ^[0-9]+$ ]]; then
         echo -e "${RED}错误: 无法从配置文件中自动检测SOCKS5端口。${NC}"
-        return 1
+        exit 1
     fi
     echo "${SOCKS_PORT}"
 }
@@ -76,51 +79,53 @@ get_current_warp_ip() {
     if [ -z "${CURRENT_IP}" ]; then
         echo -e "${RED}无法获取当前的出口IP。请检查WireProxy服务是否正在运行。${NC}"
         echo -e "${YELLOW}您可以尝试手动运行 '${FSCARMEN_SCRIPT_PATH}' 并选择 'y' 选项来重启服务。${NC}"
-        return 1
+        exit 1
     fi
     echo -e "当前的出口IP是: ${GREEN}${CURRENT_IP}${NC}"
 }
 
 flip_the_ip() {
     local port=$1
+    local current_ip=$2
     echo -e "\n${YELLOW}--- 开始执行强制IP刷新 ---${NC}"
 
-    # 1. 劫持域名解析
+    # 1. Hijack domain resolution
     echo -e "${BLUE}[1/5] 正在通过 /etc/hosts 临时劫持域名...${NC}"
-    # Clean up any previous stale entries first
-    sed -i "/${WARP_ENDPOINT_DOMAIN}/d" /etc/hosts
+    sed -i.bak "/${WARP_ENDPOINT_DOMAIN}/d" /etc/hosts
     echo "127.0.0.1 ${WARP_ENDPOINT_DOMAIN}" >> /etc/hosts
 
-    # 2. 尝试重启wireproxy，此时它会因为域名被劫持而连接失败
-    echo -e "${BLUE}[2/5] 第一次重启服务 (预期会失败，以重置状态)...${NC}"
+    # 2. Restart service (expected to fail)
+    echo -e "${BLUE}[2/5] 第一次重启服务 (以重置状态)...${NC}"
     echo "y" | ${FSCARMEN_SCRIPT_PATH} > /dev/null 2>&1
     sleep 5
 
-    # 3. 恢复域名解析
+    # 3. Restore domain resolution
     echo -e "${BLUE}[3/5] 正在恢复正常的域名解析...${NC}"
     sed -i "/${WARP_ENDPOINT_DOMAIN}/d" /etc/hosts
 
     # --- Verification Step ---
     if grep -q "${WARP_ENDPOINT_DOMAIN}" /etc/hosts; then
         echo -e "${RED}严重错误: 无法从 /etc/hosts 文件中移除劫持条目！${NC}"
-        echo -e "${YELLOW}为避免网络问题，脚本将终止。请手动编辑 /etc/hosts 文件并删除包含 '${WARP_ENDPOINT_DOMAIN}' 的行。${NC}"
+        echo -e "${YELLOW}为避免网络问题，脚本将终止。请手动编辑 /etc/hosts 并删除相关行。${NC}"
+        mv /etc/hosts.bak /etc/hosts # Restore from backup
         exit 1
     fi
+    rm -f /etc/hosts.bak
 
-    # 4. 再次重启wireproxy，现在它可以正常解析并获取新的Endpoint了
+    # 4. Restart service again (to get new IP)
     echo -e "${BLUE}[4/5] 第二次重启服务 (获取新IP)...${NC}"
     echo "y" | ${FSCARMEN_SCRIPT_PATH} > /dev/null 2>&1
 
-    # 5. 最终验证
+    # 5. Final validation
     echo -e "${BLUE}[5/5] 等待服务稳定并检查新IP...${NC}"
-    sleep 8 # Wait a bit longer for the service to fully stabilize
+    sleep 8
     NEW_IP=$(curl -s --max-time 15 --proxy "socks5h://127.0.0.1:${port}" ip.sb)
 
     echo -e "\n${GREEN}--- IP刷新操作完成 ---${NC}"
     if [ -n "${NEW_IP}" ]; then
-        if [ "${NEW_IP}" != "${CURRENT_IP}" ]; then
+        if [ "${NEW_IP}" != "${current_ip}" ]; then
             echo -e "恭喜！您的WARP出口IP已成功更换！"
-            echo -e "旧IP: ${RED}${CURRENT_IP}${NC}"
+            echo -e "旧IP: ${RED}${current_ip}${NC}"
             echo -e "新IP: ${GREEN}${NEW_IP}${NC}"
         else
             echo -e "${YELLOW}操作完成，但IP没有变化。可能是Cloudflare分配了相同的IP。${NC}"
@@ -143,21 +148,17 @@ main() {
     check_root
     check_dependencies
 
-    SOCKS_PORT=$(get_socks_port)
-    if [ $? -ne 0 ]; then
-        exit 1
-    fi
-    echo -e "${BLUE}成功检测到SOCKS5端口: ${GREEN}${SOCKS_PORT}${NC}\n"
+    local socks_port
+    socks_port=$(get_socks_port)
+    echo -e "${BLUE}成功检测到SOCKS5端口: ${GREEN}${socks_port}${NC}\n"
 
-    get_current_warp_ip "${SOCKS_PORT}"
-    if [ $? -ne 0 ]; then
-        exit 1
-    fi
+    local current_ip
+    current_ip=$(get_current_warp_ip "${socks_port}")
     
     echo ""
     read -rp "您想现在强制刷新这个IP吗? [y/N]: " confirm
     if [[ "${confirm}" =~ ^[yY]$ ]]; then
-        flip_the_ip "${SOCKS_PORT}"
+        flip_the_ip "${socks_port}" "${current_ip}"
     else
         echo "操作已取消。"
     fi
@@ -165,4 +166,5 @@ main() {
     echo -e "\n脚本执行完毕。"
 }
 
-main```
+# Run the main function
+main
