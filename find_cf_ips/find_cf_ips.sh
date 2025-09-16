@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# find_cf_ips.sh | v1.1.0
+# find_cf_ips.sh | v1.3.0
 #
 # Run Command (macOS/Linux/Windows):
 # bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh)"
@@ -9,9 +9,9 @@
 #=================================================
 #               CONFIGURATION
 #=================================================
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.3.0"
 DEFAULT_LATENCY=100      # 默认延迟阈值 (ms)
-PING_COUNT=5             # Ping次数
+PING_COUNT=4             # Ping次数 (4次是通用默认值)
 DEFAULT_C_FAIL_TOLERANCE=3 # 默认C段连续失败容忍度
 C_SEARCH_RANGE=25        # C段探测范围
 B_SEARCH_RANGE=10        # B段探测范围
@@ -31,33 +31,38 @@ NC='\033[0m' # No Color
 check_latency() {
     local ip=$1
     local os_type=$(uname)
-    local result="" # Initialize as empty
+    local result=""
     local ping_output
 
-    # Force English output for ping to ensure consistent parsing, regardless of system language.
+    # --- FINAL, CORRECTED IMPLEMENTATION ---
+    # We select the command and arguments based on the OS.
+    # The default 'else' case now correctly assumes the use of Windows' native ping.exe,
+    # which is the verified behavior in the user's Git Bash environment.
     if [[ "$os_type" == "Linux" ]]; then
-        ping_output=$(LANG=C ping -c $PING_COUNT -W 1 -i 0.2 "$ip" 2>/dev/null)
-    elif [[ "$os_type" == "Darwin" ]]; then # macOS
+        ping_output=$(LANG=C ping -c $PING_COUNT -W 2 "$ip" 2>/dev/null)
+    elif [[ "$os_type" == "Darwin" ]]; then
         ping_output=$(LANG=C ping -c $PING_COUNT -t 5 "$ip" 2>/dev/null)
-    else # Git Bash on Windows or other environments
-        ping_output=$(LANG=C ping -n $PING_COUNT -w 1000 "$ip" 2>/dev/null)
+    else # This covers MINGW (Git Bash) and assumes it uses ping.exe
+        ping_output=$(ping -n $PING_COUNT -w 2000 "$ip" 2>/dev/null)
     fi
 
+    # If the command failed to execute, the host is unreachable.
     if [[ $? -ne 0 ]]; then
         echo "9999"
         return
     fi
 
-    # CORE BUG FIX: Intelligently parse output based on its format (Unix-like vs Windows-native)
+    # Now, parse the output based on its content, not on the OS type.
     if [[ "$ping_output" == *"rtt min/avg/max/mdev"* || "$ping_output" == *"round-trip min/avg/max"* ]]; then
-        # This handles Linux, macOS, and Unix-like ping in Git Bash
+        # This handles Unix-style ping (Linux, macOS, and some rare Git Bash setups)
         result=$(echo "$ping_output" | tail -1 | awk -F'/' '{print $5}')
-    elif [[ "$ping_output" == *"Average ="* ]]; then
-        # This handles native Windows ping (e.g., in CMD)
-        result=$(echo "$ping_output" | grep 'Average' | awk -F'=' '{print $4}' | sed 's/ms//g' | tr -d ' ')
+    else
+        # This is the new, language-agnostic parser for Windows' native ping.exe output.
+        # It finds all numerical values followed by "ms", takes the last one (which is always the average), and removes "ms".
+        result=$(echo "$ping_output" | grep -oE '[0-9]+ms' | tail -n 1 | sed 's/ms//')
     fi
     
-    # Final validation
+    # Final validation to ensure we got a clean number.
     if ! [[ "$result" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "9999"
     else
@@ -112,7 +117,6 @@ echo "===================================================" >&2
 echo "  相邻IP段探测工具 (v${SCRIPT_VERSION})" >&2
 echo "===================================================" >&2
 
-# --- USER-FRIENDLY LOOP TO GET A VALID AND REACHABLE BASE IP ---
 while true; do
     read -p "请输入一个基准IP地址 (直接回车退出): " start_ip
     
