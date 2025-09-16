@@ -4,10 +4,10 @@
 # FILE:         sbv.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh" && chmod +x sbv.sh && ./sbv.sh
 # DESCRIPTION:  A dedicated management platform for Sing-Box (VLESS+Reality+Vision).
-# REVISION:     1.6.5
+# REVISION:     1.6.6
 #================================================================================
 
-SCRIPT_VERSION="1.6.5"
+SCRIPT_VERSION="1.6.6"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbv.sh"
 INSTALL_PATH="/root/sbv.sh"
 
@@ -35,8 +35,11 @@ check_dependencies() {
 }
 
 check_tfo_status() {
-    if ! sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
-        echo -e "${RED}警告：检测到您的系统可能未开启 TCP Fast Open (TFO)。${NC}"
+    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
+        echo -e "当前 TCP Fast Open (TFO) 状态: ${GREEN}已开启${NC}"
+    else
+        echo -e "当前 TCP Fast Open (TFO) 状态: ${RED}未开启${NC}"
+        echo -e "${RED}警告：TFO 未开启可能会影响连接性能。${NC}"
     fi
 }
 
