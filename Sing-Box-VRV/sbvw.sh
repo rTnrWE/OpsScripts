@@ -9,10 +9,10 @@
 # THANKS TO:    sing-box project: https://github.com/SagerNet/sing-box
 #               fscarmen/warp project: https://gitlab.com/fscarmen/warp
 #
-# REVISION:     1.2
+# REVISION:     1.3
 #================================================================================
 
-SCRIPT_VERSION="1.2"
+SCRIPT_VERSION="1.3"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh"
 INSTALL_PATH="/root/sbvw.sh"
 
@@ -373,7 +373,15 @@ main_menu() {
         case "${choice,,}" in
             1) install_standard; exit 0 ;;
             2) install_with_warp; exit 0 ;;
-            3) if [[ "$is_sbv_installed" == "true" ]]; then upgrade_to_warp; exit 0; else echo -e "${RED}无效选项。${NC}"; sleep 1; fi ;;
+            3)
+                if [[ "$is_sbv_installed" == "true" ]]; then
+                    upgrade_to_warp
+                    exit 0
+                else
+                    echo -e "\n${RED}无效选项。${NC}"
+                    sleep 1
+                fi
+                ;;
             4) 
                 if [[ "$is_sbv_installed" == "true" ]]; then show_summary "$INFO_PATH_VRV";
                 elif [[ "$is_sbvw_installed" == "true" ]]; then show_summary "$INFO_PATH_VRVW";
