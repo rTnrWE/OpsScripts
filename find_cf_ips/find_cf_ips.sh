@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# find_cf_ips.sh | v1.0.9
+# find_cf_ips.sh | v1.1.0
 #
 # Run Command (macOS/Linux/Windows):
 # bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh)"
@@ -9,7 +9,7 @@
 #=================================================
 #               CONFIGURATION
 #=================================================
-SCRIPT_VERSION="1.0.9"
+SCRIPT_VERSION="1.1.0"
 DEFAULT_LATENCY=100      # 默认延迟阈值 (ms)
 PING_COUNT=5             # Ping次数
 DEFAULT_C_FAIL_TOLERANCE=3 # 默认C段连续失败容忍度
@@ -31,15 +31,15 @@ NC='\033[0m' # No Color
 check_latency() {
     local ip=$1
     local os_type=$(uname)
-    local result
+    local result="" # Initialize as empty
     local ping_output
 
+    # Force English output for ping to ensure consistent parsing, regardless of system language.
     if [[ "$os_type" == "Linux" ]]; then
-        ping_output=$(ping -c $PING_COUNT -W 1 -i 0.2 "$ip" 2>/dev/null)
+        ping_output=$(LANG=C ping -c $PING_COUNT -W 1 -i 0.2 "$ip" 2>/dev/null)
     elif [[ "$os_type" == "Darwin" ]]; then # macOS
-        ping_output=$(ping -c $PING_COUNT -t 5 "$ip" 2>/dev/null)
-    else # Git Bash on Windows
-        # BUG FIX: Force English output for ping on Windows to ensure consistent parsing, regardless of system language.
+        ping_output=$(LANG=C ping -c $PING_COUNT -t 5 "$ip" 2>/dev/null)
+    else # Git Bash on Windows or other environments
         ping_output=$(LANG=C ping -n $PING_COUNT -w 1000 "$ip" 2>/dev/null)
     fi
 
@@ -48,12 +48,16 @@ check_latency() {
         return
     fi
 
-    if [[ "$os_type" == "Linux" || "$os_type" == "Darwin" ]]; then
+    # CORE BUG FIX: Intelligently parse output based on its format (Unix-like vs Windows-native)
+    if [[ "$ping_output" == *"rtt min/avg/max/mdev"* || "$ping_output" == *"round-trip min/avg/max"* ]]; then
+        # This handles Linux, macOS, and Unix-like ping in Git Bash
         result=$(echo "$ping_output" | tail -1 | awk -F'/' '{print $5}')
-    else
+    elif [[ "$ping_output" == *"Average ="* ]]; then
+        # This handles native Windows ping (e.g., in CMD)
         result=$(echo "$ping_output" | grep 'Average' | awk -F'=' '{print $4}' | sed 's/ms//g' | tr -d ' ')
     fi
     
+    # Final validation
     if ! [[ "$result" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "9999"
     else
