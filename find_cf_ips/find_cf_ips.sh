@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# find_cf_ips.sh | v1.0.8
+# find_cf_ips.sh | v1.0.9
 #
 # Run Command (macOS/Linux/Windows):
 # bash -c "$(curl -fsSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/find_cf_ips/find_cf_ips.sh)"
@@ -9,7 +9,7 @@
 #=================================================
 #               CONFIGURATION
 #=================================================
-SCRIPT_VERSION="1.0.8"
+SCRIPT_VERSION="1.0.9"
 DEFAULT_LATENCY=100      # 默认延迟阈值 (ms)
 PING_COUNT=5             # Ping次数
 DEFAULT_C_FAIL_TOLERANCE=3 # 默认C段连续失败容忍度
@@ -39,7 +39,8 @@ check_latency() {
     elif [[ "$os_type" == "Darwin" ]]; then # macOS
         ping_output=$(ping -c $PING_COUNT -t 5 "$ip" 2>/dev/null)
     else # Git Bash on Windows
-        ping_output=$(ping -n $PING_COUNT -w 1000 "$ip" 2>/dev/null)
+        # BUG FIX: Force English output for ping on Windows to ensure consistent parsing, regardless of system language.
+        ping_output=$(LANG=C ping -n $PING_COUNT -w 1000 "$ip" 2>/dev/null)
     fi
 
     if [[ $? -ne 0 ]]; then
@@ -111,28 +112,23 @@ echo "===================================================" >&2
 while true; do
     read -p "请输入一个基准IP地址 (直接回车退出): " start_ip
     
-    # Allow user to exit gracefully
     if [[ -z "$start_ip" ]]; then
         echo "用户选择退出。" >&2
         exit 0
     fi
 
-    # Check IP format
     if [[ ! $start_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         echo -e "${RED}错误: IP地址格式不正确，请重新输入。${NC}\n" >&2
         continue
     fi
 
-    # Test the IP's reachability
     echo "正在测试基准IP..." >&2
     initial_latency=$(check_latency "$start_ip")
 
     if [[ "$initial_latency" != "9999" ]]; then
-        # SUCCESS: We got a working IP, print latency and break the loop.
         echo -e "基准IP ${start_ip} 的平均延迟为: ${GREEN}${initial_latency}ms${NC}\n" >&2
         break
     else
-        # FAILURE: Inform the user and the loop will ask for input again.
         echo -e "${RED}错误: 基准IP ${start_ip} 无法访问或请求超时。${NC}\n" >&2
     fi
 done
