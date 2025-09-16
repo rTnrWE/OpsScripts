@@ -340,8 +340,8 @@ main_menu() {
     
     while true; do
         clear
-        local is_sbv_installed=$( [[ -f "$INFO_PATH_VRV" ]] && echo "true" || echo "false" )
-        local is_sbvw_installed=$( [[ -f "$INFO_PATH_VRVW" ]] && echo "true" || echo "false" )
+        local is_sbv_installed=$([[ -f "$INFO_PATH_VRV" ]] && echo "true" || echo "false")
+        local is_sbvw_installed=$([[ -f "$INFO_PATH_VRVW" ]] && echo "true" || echo "false")
         
         echo "======================================================"
         echo "    Sing-Box VRV & WARP 统一管理平台 v${SCRIPT_VERSION}    "
