@@ -193,7 +193,12 @@ generate_config() {
         "outbounds": [ $outbound_config ]
       }' > "$CONFIG_PATH"
 
-    local info_file_path=$([[ "$outbound_type" == "warp" ]] && echo "$INFO_PATH_VRVW" || echo "$INFO_PATH_VRV")
+    local info_file_path
+    if [[ "$outbound_type" == "warp" ]]; then
+        info_file_path="$INFO_PATH_VRVW"
+    else
+        info_file_path="$INFO_PATH_VRV"
+    fi
     tee "$info_file_path" > /dev/null <<EOF
 UUID=${uuid}
 PUBLIC_KEY=${public_key}
@@ -234,7 +239,7 @@ show_summary() {
     source "$info_file_path"
     
     local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
-    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
+    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none"
 
     echo -e "\n=================================================="
     if [[ "$info_file_path" == "$INFO_PATH_VRVW" ]]; then
@@ -252,6 +257,9 @@ show_summary() {
 
     if [[ "$CO_EXIST_MODE" == "true" ]]; then
         # ... (Co-exist mode instructions) ...
+        echo "--------------------------------------------------"
+        echo "您当前处于共存模式，sing-box 监听在内部端口 ${INTERNAL_PORT}，请确保您的反向代理或 Web 服务已正确配置。"
+        echo "--------------------------------------------------"
     else
         echo "--------------------------------------------------"
         echo "请在您自己的电脑上运行以下命令, 测试您本地到"
