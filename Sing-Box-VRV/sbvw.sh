@@ -9,10 +9,10 @@
 # THANKS TO:    sing-box project: https://github.com/SagerNet/sing-box
 #               fscarmen/warp project: https://gitlab.com/fscarmen/warp
 #
-# REVISION:     1.3
+# REVISION:     1.4
 #================================================================================
 
-SCRIPT_VERSION="1.3"
+SCRIPT_VERSION="1.4"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh"
 INSTALL_PATH="/root/sbvw.sh"
 
