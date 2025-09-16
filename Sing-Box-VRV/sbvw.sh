@@ -136,7 +136,7 @@ generate_config() {
     local uuid=$($SINGBOX_BINARY generate uuid)
     local short_id=$(openssl rand -hex 8)
     mkdir -p /etc/sing-box
-    
+
     local outbound_config
     if [[ "$outbound_type" == "warp" ]]; then
         outbound_config='{
@@ -190,7 +190,13 @@ generate_config() {
         "outbounds": [ $outbound_config ]
       }' > "$CONFIG_PATH"
 
-    local info_file_path=$([[ "$outbound_type" == "warp" ]] && echo "$INFO_PATH_VRVW" || echo "$INFO_PATH_VRV")
+    local info_file_path
+    if [[ "$outbound_type" == "warp" ]]; then
+        info_file_path="$INFO_PATH_VRVW"
+    else
+        info_file_path="$INFO_PATH_VRV"
+    fi
+
     tee "$info_file_path" > /dev/null <<EOF
 UUID=${uuid}
 PUBLIC_KEY=${public_key}
@@ -212,8 +218,10 @@ start_service() {
 show_client_config_format() {
     if [[ ! -f "$1" ]]; then return; fi
     source "$1"
-    local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
-    
+    local server_ip
+    server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com)
+    if [[ -z "$server_ip" ]]; then server_ip="[YOUR_SERVER_IP]"; fi
+
     echo "--------------------------------------------------"
     echo -e "${GREEN}客户端配置:${NC}"
     printf "  %-14s: %s\n" "server" "$server_ip"
@@ -229,9 +237,11 @@ show_summary() {
     local info_file_path="$1"
     if [[ ! -f "$info_file_path" ]]; then echo -e "${RED}错误：未找到配置信息文件。${NC}"; return; fi
     source "$info_file_path"
-    
-    local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
-    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
+
+    local server_ip
+    server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com)
+    if [[ -z "$server_ip" ]]; then server_ip="[YOUR_SERVER_IP]"; fi
+    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none"
 
     echo -e "\n=================================================="
     if [[ "$info_file_path" == "$INFO_PATH_VRVW" ]]; then
@@ -244,11 +254,12 @@ show_summary() {
     echo "--------------------------------------------------"
     echo -e "${GREEN}VLESS 导入链接:${NC}"
     echo "$vless_link"
-    
+
     show_client_config_format "$info_file_path"
 
     if [[ "$CO_EXIST_MODE" == "true" ]]; then
         # ... (Co-exist mode instructions) ...
+        echo "网站共存模式说明：请确保端口映射正确，或根据实际需求调整配置。"
     else
         echo "--------------------------------------------------"
         echo "请在您自己的电脑上运行以下命令, 测试您本地到"
@@ -285,16 +296,17 @@ upgrade_to_warp() {
     echo "--- 开始为现有 Sing-Box-VRV 添加 WARP 出站 ---"
     check_tfo_status
     install_warp || return 1
-    
+
     echo ">>> 正在将您的 sing-box 配置升级为 WARP 出站..."
+    local warp_outbound
     warp_outbound=$(jq -n '{"type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "tcp_fast_open": true}')
     jq --argjson new_outbound "$warp_outbound" '.outbounds = [$new_outbound]' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
     if [[ $? -ne 0 ]]; then echo -e "${RED}错误：升级配置文件失败！${NC}"; return 1; fi
-    
+
     if [[ -f "$INFO_PATH_VRV" ]]; then mv "$INFO_PATH_VRV" "$INFO_PATH_VRVW"; fi
-    
+
     echo -e "${GREEN}配置文件升级成功！${NC}"
-    
+
     systemctl restart sing-box; sleep 1
     if systemctl is-active --quiet sing-box; then
         echo -e "${GREEN}sing-box 服务已成功重启！${NC}"
@@ -306,11 +318,45 @@ upgrade_to_warp() {
 }
 
 manage_service() {
-    # ... (manage_service function, no changes needed) ...
+    echo "--- sing-box 服务管理 ---"
+    echo "1. 启动 sing-box"
+    echo "2. 停止 sing-box"
+    echo "3. 重启 sing-box"
+    echo "4. 查看 sing-box 状态"
+    echo "0. 返回主菜单"
+    read -p "请选择操作: " svc_choice
+    case "$svc_choice" in
+        1) systemctl start sing-box && echo "已启动" ;;
+        2) systemctl stop sing-box && echo "已停止" ;;
+        3) systemctl restart sing-box && echo "已重启" ;;
+        4) systemctl status sing-box ;;
+        0) return ;;
+        *) echo "无效选项" ;;
+    esac
+    read -n 1 -s -r -p "按任意键返回管理菜单..."
 }
 
 uninstall_vrvw() {
-    # ... (uninstall function, can be reused) ...
+    echo "--- 正在卸载 Sing-Box-VRV ---"
+    systemctl stop sing-box
+    systemctl disable sing-box
+    rm -rf /etc/sing-box "$INSTALL_PATH"
+    if command -v warp &>/dev/null; then
+        systemctl stop wireproxy
+        systemctl disable wireproxy
+        rm -f /root/fscarmen-warp.sh
+    fi
+    echo -e "${GREEN}Sing-Box-VRV 已彻底卸载。${NC}"
+}
+
+update_script() {
+    echo ">>> 正在检查和更新管理脚本..."
+    if wget -N --no-check-certificate "$SCRIPT_URL" -O "$INSTALL_PATH"; then
+        echo -e "${GREEN}管理脚本已成功更新！${NC}"
+        exec bash "$INSTALL_PATH"
+    else
+        echo -e "${RED}脚本下载失败，请稍后重试。${NC}"
+    fi
 }
 
 install_script_if_needed() {
@@ -337,12 +383,14 @@ get_service_status() {
 
 main_menu() {
     install_script_if_needed
-    
+
     while true; do
         clear
-        local is_sbv_installed=$([[ -f "$INFO_PATH_VRV" ]] && echo "true" || echo "false")
-        local is_sbvw_installed=$([[ -f "$INFO_PATH_VRVW" ]] && echo "true" || echo "false")
-        
+        local is_sbv_installed
+        local is_sbvw_installed
+        is_sbv_installed=$([[ -f "$INFO_PATH_VRV" ]] && echo "true" || echo "false")
+        is_sbvw_installed=$([[ -f "$INFO_PATH_VRVW" ]] && echo "true" || echo "false")
+
         echo "======================================================"
         echo "    Sing-Box VRV & WARP 统一管理平台 v${SCRIPT_VERSION}    "
         if [[ "$is_sbv_installed" == "true" || "$is_sbvw_installed" == "true" ]]; then
