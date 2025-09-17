@@ -5,9 +5,10 @@
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh" && chmod +x sbvw.sh && ./sbvw.sh
 # DESCRIPTION:  Sing-Box (VLESS+Reality+Vision) 一键管理平台，支持标准出站和 WARP 出站
 #               日志功能默认永远关闭，用户拿到的配置 log.disabled 恒为 true
+#               集成 Reality 域名稳定性检测与一键更换功能
 #================================================================================
 
-SCRIPT_VERSION="2.0"
+SCRIPT_VERSION="2.1"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh"
 INSTALL_PATH="/root/sbvw.sh"
 
@@ -79,14 +80,20 @@ install_warp() {
     return 0
 }
 
-internal_validate_domain() {
+check_reality_domain() {
     local domain="$1"
-    echo -n "正在从 VPS 快速验证 ${domain} 的技术可用性... "
-    if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 5 "https://${domain}" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
-        echo -e "${GREEN}成功！${NC}"; return 0
-    else
-        echo -e "${RED}失败！${NC}"; return 1
-    fi
+    local success_count=0
+    echo "正在检测 ${domain} 的 Reality 可用性（连续5次）..."
+    for i in {1..5}; do
+        if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 https://$domain 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+            echo -e "${GREEN}SUCCESS${NC}: $domain 第 $i 次检测通过。"
+            ((success_count++))
+        else
+            echo -e "${RED}FAILURE${NC}: $domain 第 $i 次检测失败。"
+        fi
+        sleep 1
+    done
+    [[ $success_count -ge 4 ]]
 }
 
 generate_config() {
@@ -106,14 +113,14 @@ generate_config() {
 
     local handshake_server
     while true; do
-        echo -en "${GREEN}"
-        read -p "请输入 Reality 域名 [默认 www.bing.com]: " handshake_server
-        echo -en "${NC}"
+        echo -en "${GREEN}请输入 Reality 域名（示例：www.bing.com）: ${NC}"
+        read handshake_server
         handshake_server=${handshake_server:-www.bing.com}
-        if internal_validate_domain "$handshake_server"; then
+        if check_reality_domain "$handshake_server"; then
+            echo -e "${GREEN}最终检测：$handshake_server 适合 Reality SNI，继续安装。${NC}"
             break
         else
-            echo -e "${RED}该域名技术上不可用。请选择另外一个。${NC}"
+            echo -e "${RED}检测未通过（连续5次至少通过4次才算合格）。请更换其它 Reality 域名。${NC}"
             read -p "是否 [R]重新输入 或 [Q]退出脚本? (R/Q): " choice
             case "${choice,,}" in
                 q|quit) echo -e "${RED}安装已中止。${NC}"; return 1 ;;
@@ -226,6 +233,31 @@ view_log() {
     # 双保险：日志关闭
     jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
     systemctl restart sing-box
+}
+
+change_reality_domain() {
+    while true; do
+        echo -en "${GREEN}请输入新的 Reality 域名（示例：www.bing.com）: ${NC}"
+        read new_domain
+        new_domain=${new_domain:-www.bing.com}
+        if check_reality_domain "$new_domain"; then
+            echo -e "${GREEN}最终检测：$new_domain 非常适合 Reality SNI，将自动修改配置。${NC}"
+            # 修改 config.json 的 server_name, handshake.server
+            jq --arg new_domain "$new_domain" \
+                '.inbounds[0].tls.server_name = $new_domain | .inbounds[0].tls.reality.handshake.server = $new_domain' \
+                "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+            systemctl restart sing-box
+            echo -e "${GREEN}Reality 域名已更换并重启 sing-box。${NC}"
+            break
+        else
+            echo -e "${RED}检测未通过（连续5次至少通过4次才算合格）。请更换其它 Reality 域名。${NC}"
+            read -p "是否 [R]重新输入 或 [Q]返回菜单? (R/Q): " choice
+            case "${choice,,}" in
+                q|quit) return ;;
+                *) continue ;;
+            esac
+        fi
+    done
 }
 
 start_service() {
@@ -345,6 +377,7 @@ manage_service() {
     echo " 3. 启动服务"
     echo " 4. 查看状态"
     echo " 5. 查看实时日志"
+    echo " 6. 更换 Reality 域名"
     echo " 0. 返回主菜单"
     echo "-------------------------"
     read -p "请输入选项: " sub_choice
@@ -360,6 +393,9 @@ manage_service() {
             ;;
         5)
             view_log
+            ;;
+        6)
+            change_reality_domain
             ;;
         *) return ;;
     esac
