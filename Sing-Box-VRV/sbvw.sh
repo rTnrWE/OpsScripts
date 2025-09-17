@@ -6,9 +6,6 @@
 # DESCRIPTION:  An all-in-one management platform for Sing-Box (VLESS+Reality+Vision),
 #               supporting both standard and WARP outbounds.
 #
-# THANKS TO:    sing-box project: https://github.com/SagerNet/sing-box
-#               fscarmen/warp project: https://gitlab.com/fscarmen/warp
-#
 # REVISION:     1.6
 #================================================================================
 
@@ -212,14 +209,14 @@ EOF
 
 enable_log() {
     if [[ -f "$CONFIG_PATH" ]]; then
-        jq '.log.disabled = false' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+        jq '.log = {"disabled": false}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
         systemctl restart sing-box
     fi
 }
 
 disable_log() {
     if [[ -f "$CONFIG_PATH" ]]; then
-        jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+        jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
         systemctl restart sing-box
     fi
 }
