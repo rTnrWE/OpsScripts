@@ -3,13 +3,11 @@
 #================================================================================
 # FILE:         sbvw.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh" && chmod +x sbvw.sh && ./sbvw.sh
-# DESCRIPTION:  An all-in-one management平台 for Sing-Box (VLESS+Reality+Vision),
-#               supporting both standard and WARP outbounds.
-#
-# REVISION:     1.8
+# DESCRIPTION:  Sing-Box (VLESS+Reality+Vision) 一键管理平台，支持标准出站和 WARP 出站
+#               日志功能默认永远关闭，用户拿到的配置 log.disabled 恒为 true
 #================================================================================
 
-SCRIPT_VERSION="1.8"
+SCRIPT_VERSION="2.0"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh"
 INSTALL_PATH="/root/sbvw.sh"
 
@@ -150,6 +148,7 @@ generate_config() {
         }'
     fi
 
+    # 配置文件日志功能始终关闭
     jq -n \
       --arg listen_addr "$listen_addr" \
       --argjson listen_port "$listen_port" \
@@ -200,32 +199,33 @@ LISTEN_PORT=443
 CO_EXIST_MODE=${co_exist_mode}
 INTERNAL_PORT=${listen_port}
 EOF
-    echo -e "${GREEN}配置文件及信息已保存。${NC}"
+    echo -e "${GREEN}配置文件及信息已保存（日志功能已关闭）。${NC}"
 }
 
-enable_log() {
-    if [[ -f "$CONFIG_PATH" ]]; then
-        jq '.log = {"disabled": false}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-        systemctl restart sing-box
-    fi
-}
-
-disable_log() {
-    if [[ -f "$CONFIG_PATH" ]]; then
-        jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-        systemctl restart sing-box
-    fi
-}
-
-check_and_disable_log() {
+auto_disable_log_on_start() {
     if [[ -f "$CONFIG_PATH" ]]; then
         local log_disabled
         log_disabled=$(jq -r '.log.disabled' "$CONFIG_PATH")
         if [[ "$log_disabled" != "true" ]]; then
             jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
             systemctl restart sing-box
+            echo -e "${GREEN}已自动关闭 sing-box 日志。${NC}"
         fi
     fi
+}
+
+view_log() {
+    # 临时打开日志
+    jq '.log = {"disabled": false}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+    systemctl restart sing-box
+    (
+        trap 'jq ".log = {\"disabled\": true}" "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"; systemctl restart sing-box; exit' INT TERM EXIT TSTP
+        echo -e "${GREEN}按 Ctrl+C 或 Ctrl+Z 可停止实时日志查看...${NC}"
+        journalctl -u sing-box -f --no-pager
+    )
+    # 双保险：日志关闭
+    jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+    systemctl restart sing-box
 }
 
 start_service() {
@@ -318,9 +318,13 @@ upgrade_to_warp() {
     jq --argjson new_outbound "$warp_outbound" '.outbounds = [$new_outbound]' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
     if [[ $? -ne 0 ]]; then echo -e "${RED}错误：升级配置文件失败！${NC}"; return 1; fi
     
+    # 日志功能始终关闭
+    jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+    systemctl restart sing-box
+
     if [[ -f "$INFO_PATH_VRV" ]]; then mv "$INFO_PATH_VRV" "$INFO_PATH_VRVW"; fi
     
-    echo -e "${GREEN}配置文件升级成功！${NC}"
+    echo -e "${GREEN}配置文件升级成功（日志功能已关闭）！${NC}"
     
     systemctl restart sing-box; sleep 1
     if systemctl is-active --quiet sing-box; then
@@ -355,13 +359,7 @@ manage_service() {
             read -n 1 -s -r -p "按任意键返回服务菜单..."
             ;;
         5)
-            enable_log
-            (
-                trap 'disable_log; exit' INT TERM EXIT TSTP
-                echo -e "${GREEN}按 Ctrl+C 或 Ctrl+Z 可停止实时日志查看...${NC}"
-                journalctl -u sing-box -f --no-pager
-            )
-            check_and_disable_log
+            view_log
             ;;
         *) return ;;
     esac
@@ -441,6 +439,7 @@ get_service_status() {
 
 main_menu() {
     install_script_if_needed
+    auto_disable_log_on_start
     
     while true; do
         clear
