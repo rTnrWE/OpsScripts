@@ -6,10 +6,10 @@
 # DESCRIPTION:  An all-in-one management平台 for Sing-Box (VLESS+Reality+Vision),
 #               supporting both standard and WARP outbounds.
 #
-# REVISION:     1.7
+# REVISION:     1.8
 #================================================================================
 
-SCRIPT_VERSION="1.7"
+SCRIPT_VERSION="1.8"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh"
 INSTALL_PATH="/root/sbvw.sh"
 
@@ -217,6 +217,17 @@ disable_log() {
     fi
 }
 
+check_and_disable_log() {
+    if [[ -f "$CONFIG_PATH" ]]; then
+        local log_disabled
+        log_disabled=$(jq -r '.log.disabled' "$CONFIG_PATH")
+        if [[ "$log_disabled" != "true" ]]; then
+            jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+            systemctl restart sing-box
+        fi
+    fi
+}
+
 start_service() {
     echo ">>> 正在启动并设置 sing-box 开机自启..."
     systemctl daemon-reload; systemctl enable sing-box >/dev/null 2>&1; systemctl restart sing-box; sleep 2
@@ -350,7 +361,7 @@ manage_service() {
                 echo -e "${GREEN}按 Ctrl+C 或 Ctrl+Z 可停止实时日志查看...${NC}"
                 journalctl -u sing-box -f --no-pager
             )
-            disable_log
+            check_and_disable_log
             ;;
         *) return ;;
     esac
