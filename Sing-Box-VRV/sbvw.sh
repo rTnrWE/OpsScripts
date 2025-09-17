@@ -3,13 +3,13 @@
 #================================================================================
 # FILE:         sbvw.sh
 # USAGE:        wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh" && chmod +x sbvw.sh && ./sbvw.sh
-# DESCRIPTION:  An all-in-one management platform for Sing-Box (VLESS+Reality+Vision),
+# DESCRIPTION:  An all-in-one management平台 for Sing-Box (VLESS+Reality+Vision),
 #               supporting both standard and WARP outbounds.
 #
-# REVISION:     1.6
+# REVISION:     1.7
 #================================================================================
 
-SCRIPT_VERSION="1.6"
+SCRIPT_VERSION="1.7"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh"
 INSTALL_PATH="/root/sbvw.sh"
 
@@ -71,9 +71,7 @@ install_warp() {
     echo "完成后，此脚本将自动继续。"
     echo "======================================================"
     read -n 1 -s -r -p "按任意键继续..."
-    
     bash "$warp_installer" w
-    
     if ! systemctl is-active --quiet wireproxy; then
         echo -e "${RED}错误：检测到 WireProxy 服务未成功启动。${NC}"
         echo "请再次运行本脚本，选择 '6. 管理 WARP'，并确保 WireProxy 正常工作。"
@@ -95,9 +93,7 @@ internal_validate_domain() {
 
 generate_config() {
     local outbound_type="$1"
-    
     echo ">>> 正在配置 VLESS + Reality + Vision..."
-    
     local listen_addr="::"
     local listen_port=443
     local co_exist_mode=false
@@ -349,8 +345,11 @@ manage_service() {
             ;;
         5)
             enable_log
-            echo -e "${GREEN}按 Ctrl+C 可停止实时日志查看...${NC}"
-            journalctl -u sing-box -f --no-pager
+            (
+                trap 'disable_log; exit' INT TERM EXIT TSTP
+                echo -e "${GREEN}按 Ctrl+C 或 Ctrl+Z 可停止实时日志查看...${NC}"
+                journalctl -u sing-box -f --no-pager
+            )
             disable_log
             ;;
         *) return ;;
