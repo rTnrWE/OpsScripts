@@ -9,7 +9,7 @@
 # THANKS TO:    sing-box project: https://github.com/SagerNet/sing-box
 #               fscarmen/warp project: https://gitlab.com/fscarmen/warp
 #
-# REVISION:     1.5
+# REVISION:     1.5-FIXED
 #================================================================================
 
 SCRIPT_VERSION="1.5"
@@ -23,7 +23,6 @@ INFO_PATH_VRVW="/etc/sing-box/vrvw_info.env"
 SINGBOX_BINARY=""
 WARP_SCRIPT_URL="https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh"
 
-# Clean up terminal color on exit
 trap 'echo -en "${NC}"' EXIT
 
 check_root() { [[ "$EUID" -ne 0 ]] && { echo -e "${RED}错误：此脚本必须以 root 权限运行。${NC}"; exit 1; }; }
@@ -128,7 +127,7 @@ generate_config() {
     local uuid=$($SINGBOX_BINARY generate uuid)
     local short_id=$(openssl rand -hex 8)
     mkdir -p /etc/sing-box
-    
+
     local outbound_config
     if [[ "$outbound_type" == "warp" ]]; then
         outbound_config='{"type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "tcp_fast_open": true}'
@@ -136,8 +135,53 @@ generate_config() {
         outbound_config='{"type": "direct", "tag": "direct", "tcp_fast_open": true}'
     fi
 
-    jq -n --arg listen_addr "$listen_addr" --argjson listen_port "$listen_port" --arg uuid "$uuid" --arg server_name "$handshake_server" --arg private_key "$private_key" --arg short_id "$short_id" --argjson outbound_config "$outbound_config" \
-      '{"log": {"disabled": true}, "inbounds": [{"type": "vless", "tag": "vless-in", "listen": $listen_addr, "listen_port": $listen_port, "sniff": true, "sniff_override_destination": true, "tcp_fast_open": true, "users": [{"uuid": $uuid, "flow": "xtls-rprx-vision"}], "tls": {"enabled": true, "server_name": $server_name, "reality": {"enabled": true, "handshake": {"server": $server_name, "server_port": 443}, "private_key": $private_key, "short_id": ["", $short_id]}}}], "outbounds": [$outbound_config]}' > "$CONFIG_PATH"
+    jq -n \
+        --arg listen_addr "$listen_addr" \
+        --argjson listen_port "$listen_port" \
+        --arg uuid "$uuid" \
+        --arg server_name "$handshake_server" \
+        --arg private_key "$private_key" \
+        --arg short_id "$short_id" \
+        --arg public_key "$public_key" \
+        --argjson outbound_config "$outbound_config" \
+        '
+        {
+            log: { disabled: true },
+            inbounds: [
+                {
+                    type: "vless",
+                    tag: "vless-in",
+                    listen: $listen_addr,
+                    listen_port: $listen_port,
+                    sniff: true,
+                    sniff_override_destination: true,
+                    tcp_fast_open: true,
+                    users: [
+                        {
+                            uuid: $uuid,
+                            flow: "xtls-rprx-vision"
+                        }
+                    ],
+                    tls: {
+                        enabled: true,
+                        server_name: $server_name,
+                        reality: {
+                            enabled: true,
+                            private_key: $private_key,
+                            handshake: {
+                                server: $server_name,
+                                port: 443
+                            },
+                            short_id: [$short_id]
+                        }
+                    }
+                }
+            ],
+            outbounds: [
+                $outbound_config
+            ]
+        }
+        ' > "$CONFIG_PATH"
 
     local info_file_path=$([[ "$outbound_type" == "warp" ]] && echo "$INFO_PATH_VRVW" || echo "$INFO_PATH_VRV")
     tee "$info_file_path" > /dev/null <<EOF
@@ -145,7 +189,7 @@ UUID=${uuid}
 PUBLIC_KEY=${public_key}
 SHORT_ID=${short_id}
 HANDSHAKE_SERVER=${handshake_server}
-LISTEN_PORT=443
+LISTEN_PORT=$([ "$co_exist_mode" = "true" ] && echo "$listen_port" || echo "443")
 CO_EXIST_MODE=${co_exist_mode}
 INTERNAL_PORT=${listen_port}
 EOF
@@ -180,8 +224,7 @@ show_summary() {
     source "$info_file_path"
     
     local server_ip; server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
-    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#Sing-Box-VRV"
-
+    local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none"
     echo -e "\n=================================================="
     if [[ "$info_file_path" == "$INFO_PATH_VRVW" ]]; then
         echo "    Sing-Box-(VLESS+Reality+Vision) WARP 出站配置    "
@@ -197,11 +240,13 @@ show_summary() {
     show_client_config_format "$info_file_path"
 
     if [[ "$CO_EXIST_MODE" == "true" ]]; then
-        # ... (Co-exist mode instructions remain the same) ...
+        echo "--------------------------------------------------"
+        echo "共存模式已启用，当前 sing-box 内部监听端口：$INTERNAL_PORT"
+        echo "请确保您的反向代理（如 Nginx/Caddy）已正确配置转发到此端口。"
+        echo "--------------------------------------------------"
     else
         echo "--------------------------------------------------"
-        echo "请在您自己的电脑上运行以下命令, 测试您本地到"
-        echo "Reality 域名的真实网络延迟 (越低越好):"
+        echo "请在您自己的电脑上运行以下命令, 测试您本地到 Reality 域名的真实网络延迟 (越低越好):"
         echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
         echo "--------------------------------------------------"
     fi
@@ -284,11 +329,32 @@ change_reality_domain() {
 }
 
 manage_service() {
-    # ... (manage_service function, no changes needed) ...
+    echo "------------------------------------------------------"
+    echo "Sing-Box 管理菜单："
+    echo "1. 启动 sing-box"
+    echo "2. 停止 sing-box"
+    echo "3. 重启 sing-box"
+    echo "4. 查看 sing-box 状态"
+    echo "0. 返回主菜单"
+    read -p "请选择操作: " ms_choice
+    case "$ms_choice" in
+        1) systemctl start sing-box; sleep 1; echo "Sing-Box 已启动。" ;;
+        2) systemctl stop sing-box; sleep 1; echo "Sing-Box 已停止。" ;;
+        3) systemctl restart sing-box; sleep 1; echo "Sing-Box 已重启。" ;;
+        4) systemctl status sing-box ;;
+        0) return ;;
+        *) echo "无效选项！" ;;
+    esac
+    read -n 1 -s -r -p "按任意键返回..."
 }
 
 uninstall_vrvw() {
-    # ... (uninstall function, can be reused) ...
+    echo "正在卸载 sing-box 和相关配置..."
+    systemctl stop sing-box
+    systemctl disable sing-box
+    rm -rf /etc/sing-box
+    rm -f /root/sbvw.sh
+    echo -e "${GREEN}卸载完成。${NC}"
 }
 
 install_script_if_needed() {
@@ -304,7 +370,14 @@ install_script_if_needed() {
 }
 
 update_script() {
-    # ... (update_script function remains the same) ...
+    echo "正在检查更新..."
+    if wget -N --no-check-certificate "$SCRIPT_URL" -O "$INSTALL_PATH"; then
+        chmod +x "$INSTALL_PATH"
+        echo -e "${GREEN}脚本已更新，正在重启...${NC}"
+        exec bash "$INSTALL_PATH"
+    else
+        echo -e "${RED}脚本更新失败。${NC}"
+    fi
 }
 
 get_service_status() {
@@ -329,7 +402,7 @@ main_menu() {
         if [[ "$is_sbv_installed" == "true" || "$is_sbvw_installed" == "true" ]]; then
             echo "--------------------------------------------------"
             get_service_status "sing-box" "Sing-Box"
-            if command -v warp &>/dev/null; then
+            if systemctl status wireproxy &>/dev/null; then
                 get_service_status "wireproxy" "WireProxy"
             fi
         fi
