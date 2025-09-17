@@ -9,10 +9,10 @@
 # THANKS TO:    sing-box project: https://github.com/SagerNet/sing-box
 #               fscarmen/warp project: https://gitlab.com/fscarmen/warp
 #
-# REVISION:     1.5-FIXED
+# REVISION:     1.6
 #================================================================================
 
-SCRIPT_VERSION="1.5"
+SCRIPT_VERSION="1.6"
 SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh"
 INSTALL_PATH="/root/sbvw.sh"
 
@@ -41,8 +41,11 @@ check_dependencies() {
 }
 
 check_tfo_status() {
-    if ! sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
-        echo -e "${RED}警告：检测到您的系统可能未开启 TCP Fast Open (TFO)。${NC}"
+    if sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
+        echo -e "当前 TCP Fast Open (TFO) 状态: ${GREEN}已开启${NC}"
+    else
+        echo -e "当前 TCP Fast Open (TFO) 状态: ${RED}未开启${NC}"
+        echo -e "${RED}警告：TFO 未开启可能会影响连接性能。${NC}"
     fi
 }
 
@@ -76,7 +79,7 @@ install_warp() {
     
     if ! systemctl is-active --quiet wireproxy; then
         echo -e "${RED}错误：检测到 WireProxy 服务未成功启动。${NC}"
-        echo "请再次运行本脚本，选择 '7. 管理 WARP'，并确保 WireProxy 正常工作。"
+        echo "请再次运行本脚本，选择 '6. 管理 WARP'，并确保 WireProxy 正常工作。"
         return 1
     fi
     echo -e "${GREEN}检测到 WireProxy 已成功安装并运行！${NC}"
@@ -98,9 +101,13 @@ generate_config() {
     
     echo ">>> 正在配置 VLESS + Reality + Vision..."
     
-    local listen_addr="::"; local listen_port=443; local co_exist_mode=false
+    local listen_addr="::"
+    local listen_port=443
+    local co_exist_mode=false
+
     if ss -tlpn | grep -q ":${listen_port} "; then
-        co_exist_mode=true; listen_addr="127.0.0.1"
+        co_exist_mode=true
+        listen_addr="127.0.0.1"
         echo "检测到 443 端口已被占用，将切换到“网站共存”模式。"
         read -p "请输入 sing-box 用于内部监听的端口 [默认 10443]: " custom_port
         listen_port=${custom_port:-10443}
@@ -108,9 +115,13 @@ generate_config() {
 
     local handshake_server
     while true; do
-        echo -en "${GREEN}"; read -p "请输入 Reality 域名 [默认 www.bing.com]: " handshake_server; echo -en "${NC}"
+        echo -en "${GREEN}"
+        read -p "请输入 Reality 域名 [默认 www.bing.com]: " handshake_server
+        echo -en "${NC}"
         handshake_server=${handshake_server:-www.bing.com}
-        if internal_validate_domain "$handshake_server"; then break; else
+        if internal_validate_domain "$handshake_server"; then
+            break
+        else
             echo -e "${RED}该域名技术上不可用。请选择另外一个。${NC}"
             read -p "是否 [R]重新输入 或 [Q]退出脚本? (R/Q): " choice
             case "${choice,,}" in
@@ -127,73 +138,90 @@ generate_config() {
     local uuid=$($SINGBOX_BINARY generate uuid)
     local short_id=$(openssl rand -hex 8)
     mkdir -p /etc/sing-box
-
+    
     local outbound_config
     if [[ "$outbound_type" == "warp" ]]; then
-        outbound_config='{"type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "tcp_fast_open": true}'
+        outbound_config='{
+          "type": "socks",
+          "tag": "warp-out",
+          "server": "127.0.0.1",
+          "server_port": 40043,
+          "version": "5",
+          "tcp_fast_open": true
+        }'
     else
-        outbound_config='{"type": "direct", "tag": "direct", "tcp_fast_open": true}'
+        outbound_config='{
+          "type": "direct",
+          "tag": "direct",
+          "tcp_fast_open": true
+        }'
     fi
 
     jq -n \
-        --arg listen_addr "$listen_addr" \
-        --argjson listen_port "$listen_port" \
-        --arg uuid "$uuid" \
-        --arg server_name "$handshake_server" \
-        --arg private_key "$private_key" \
-        --arg short_id "$short_id" \
-        --arg public_key "$public_key" \
-        --argjson outbound_config "$outbound_config" \
-        '
-        {
-            log: { disabled: true },
-            inbounds: [
-                {
-                    type: "vless",
-                    tag: "vless-in",
-                    listen: $listen_addr,
-                    listen_port: $listen_port,
-                    sniff: true,
-                    sniff_override_destination: true,
-                    tcp_fast_open: true,
-                    users: [
-                        {
-                            uuid: $uuid,
-                            flow: "xtls-rprx-vision"
-                        }
-                    ],
-                    tls: {
-                        enabled: true,
-                        server_name: $server_name,
-                        reality: {
-                            enabled: true,
-                            private_key: $private_key,
-                            handshake: {
-                                server: $server_name,
-                                port: 443
-                            },
-                            short_id: [$short_id]
-                        }
-                    }
-                }
-            ],
-            outbounds: [
-                $outbound_config
-            ]
-        }
-        ' > "$CONFIG_PATH"
+      --arg listen_addr "$listen_addr" \
+      --argjson listen_port "$listen_port" \
+      --arg uuid "$uuid" \
+      --arg server_name "$handshake_server" \
+      --arg private_key "$private_key" \
+      --arg short_id "$short_id" \
+      --argjson outbound_config "$outbound_config" \
+      '{
+        "log": { "disabled": true },
+        "inbounds": [
+          {
+            "type": "vless",
+            "tag": "vless-in",
+            "listen": $listen_addr,
+            "listen_port": $listen_port,
+            "sniff": true,
+            "sniff_override_destination": true,
+            "tcp_fast_open": true,
+            "users": [ { "uuid": $uuid, "flow": "xtls-rprx-vision" } ],
+            "tls": {
+              "enabled": true,
+              "server_name": $server_name,
+              "reality": {
+                "enabled": true,
+                "handshake": { "server": $server_name, "server_port": 443 },
+                "private_key": $private_key,
+                "short_id": [ "", $short_id ]
+              }
+            }
+          }
+        ],
+        "outbounds": [ $outbound_config ]
+      }' > "$CONFIG_PATH"
 
-    local info_file_path=$([[ "$outbound_type" == "warp" ]] && echo "$INFO_PATH_VRVW" || echo "$INFO_PATH_VRV")
+    local info_file_path
+    if [[ "$outbound_type" == "warp" ]]; then
+        info_file_path="$INFO_PATH_VRVW"
+    else
+        info_file_path="$INFO_PATH_VRV"
+    fi
     tee "$info_file_path" > /dev/null <<EOF
 UUID=${uuid}
 PUBLIC_KEY=${public_key}
 SHORT_ID=${short_id}
 HANDSHAKE_SERVER=${handshake_server}
-LISTEN_PORT=$([ "$co_exist_mode" = "true" ] && echo "$listen_port" || echo "443")
+LISTEN_PORT=443
 CO_EXIST_MODE=${co_exist_mode}
 INTERNAL_PORT=${listen_port}
 EOF
     echo -e "${GREEN}配置文件及信息已保存。${NC}"
+}
+
+enable_log() {
+    if [[ -f "$CONFIG_PATH" ]]; then
+        jq '.log.disabled = false' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+        systemctl restart sing-box
+    fi
+}
+
+disable_log() {
+    if [[ -f "$CONFIG_PATH" ]]; then
+        jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+        systemctl restart sing-box
+    fi
 }
 
 start_service() {
@@ -205,7 +233,7 @@ start_service() {
 show_client_config_format() {
     if [[ ! -f "$1" ]]; then return; fi
     source "$1"
-    local server_ip; server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
+    local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
     
     echo "--------------------------------------------------"
     echo -e "${GREEN}客户端配置:${NC}"
@@ -223,8 +251,9 @@ show_summary() {
     if [[ ! -f "$info_file_path" ]]; then echo -e "${RED}错误：未找到配置信息文件。${NC}"; return; fi
     source "$info_file_path"
     
-    local server_ip; server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
+    local server_ip=$(curl -s4 icanhazip.com || curl -s6 icanhazip.com) || server_ip="[YOUR_SERVER_IP]"
     local vless_link="vless://${UUID}@${server_ip}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none"
+
     echo -e "\n=================================================="
     if [[ "$info_file_path" == "$INFO_PATH_VRVW" ]]; then
         echo "    Sing-Box-(VLESS+Reality+Vision) WARP 出站配置    "
@@ -241,12 +270,12 @@ show_summary() {
 
     if [[ "$CO_EXIST_MODE" == "true" ]]; then
         echo "--------------------------------------------------"
-        echo "共存模式已启用，当前 sing-box 内部监听端口：$INTERNAL_PORT"
-        echo "请确保您的反向代理（如 Nginx/Caddy）已正确配置转发到此端口。"
+        echo "您当前处于共存模式，sing-box 监听在内部端口 ${INTERNAL_PORT}，请确保您的反向代理或 Web 服务已正确配置。"
         echo "--------------------------------------------------"
     else
         echo "--------------------------------------------------"
-        echo "请在您自己的电脑上运行以下命令, 测试您本地到 Reality 域名的真实网络延迟 (越低越好):"
+        echo "请在您自己的电脑上运行以下命令, 测试您本地到"
+        echo "Reality 域名的真实网络延迟 (越低越好):"
         echo -e "${GREEN}ping ${HANDSHAKE_SERVER}${NC}"
         echo "--------------------------------------------------"
     fi
@@ -281,7 +310,7 @@ upgrade_to_warp() {
     install_warp || return 1
     
     echo ">>> 正在将您的 sing-box 配置升级为 WARP 出站..."
-    local warp_outbound; warp_outbound=$(jq -n '{"type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "tcp_fast_open": true}')
+    warp_outbound=$(jq -n '{"type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "tcp_fast_open": true}')
     jq --argjson new_outbound "$warp_outbound" '.outbounds = [$new_outbound]' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
     if [[ $? -ne 0 ]]; then echo -e "${RED}错误：升级配置文件失败！${NC}"; return 1; fi
     
@@ -299,62 +328,57 @@ upgrade_to_warp() {
     fi
 }
 
-change_reality_domain() {
-    local new_domain
-    while true; do
-        echo -en "${GREEN}"; read -p "请输入新的 Reality 域名: " new_domain; echo -en "${NC}"
-        [[ -z "$new_domain" ]] && { echo -e "${RED}域名不能为空。${NC}"; continue; }
-        if internal_validate_domain "$new_domain"; then
-            break
-        else
-            echo -e "${RED}该域名技术上不可用。请选择另外一个。${NC}"
-            read -p "是否 [R]重新输入 或 [Q]退出? (R/Q): " choice
-            case "${choice,,}" in
-                q|quit) echo -e "${RED}操作已中止。${NC}"; return ;;
-                *) continue ;;
-            esac
-        fi
-    done
-
-    echo ">>> 正在更新配置文件..."
-    jq --arg domain "$new_domain" '.inbounds[0].tls.server_name = $domain | .inbounds[0].tls.reality.handshake.server = $domain' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-    if [[ $? -ne 0 ]]; then echo -e "${RED}错误：更新配置文件失败！${NC}"; return; fi
-    
-    local current_info_file=$([[ -f "$INFO_PATH_VRVW" ]] && echo "$INFO_PATH_VRVW" || echo "$INFO_PATH_VRV")
-    sed -i "s/^HANDSHAKE_SERVER=.*/HANDSHAKE_SERVER=${new_domain}/" "$current_info_file"
-    echo -e "${GREEN}配置文件已更新。${NC}"
-    
-    systemctl restart sing-box; sleep 1; echo -e "\n服务已重启，以下是您的新配置："
-    show_summary "$current_info_file"
-}
-
 manage_service() {
-    echo "------------------------------------------------------"
-    echo "Sing-Box 管理菜单："
-    echo "1. 启动 sing-box"
-    echo "2. 停止 sing-box"
-    echo "3. 重启 sing-box"
-    echo "4. 查看 sing-box 状态"
-    echo "0. 返回主菜单"
-    read -p "请选择操作: " ms_choice
-    case "$ms_choice" in
-        1) systemctl start sing-box; sleep 1; echo "Sing-Box 已启动。" ;;
-        2) systemctl stop sing-box; sleep 1; echo "Sing-Box 已停止。" ;;
-        3) systemctl restart sing-box; sleep 1; echo "Sing-Box 已重启。" ;;
-        4) systemctl status sing-box ;;
-        0) return ;;
-        *) echo "无效选项！" ;;
+    clear
+    echo "--- sing-box 服务管理 ---"
+    echo "-------------------------"
+    echo " 1. 重启服务"
+    echo " 2. 停止服务"
+    echo " 3. 启动服务"
+    echo " 4. 查看状态"
+    echo " 5. 查看实时日志"
+    echo " 0. 返回主菜单"
+    echo "-------------------------"
+    read -p "请输入选项: " sub_choice
+    case $sub_choice in
+        1) systemctl restart sing-box; echo -e "${GREEN}sing-box 服务已重启。${NC}"; sleep 1 ;;
+        2) systemctl stop sing-box; echo "sing-box 服务已停止。"; sleep 1 ;;
+        3) systemctl start sing-box; echo -e "${GREEN}sing-box 服务已启动。${NC}"; sleep 1 ;;
+        4) 
+            echo "---"
+            systemctl status sing-box
+            echo "---"
+            read -n 1 -s -r -p "按任意键返回服务菜单..."
+            ;;
+        5)
+            enable_log
+            echo -e "${GREEN}按 Ctrl+C 可停止实时日志查看...${NC}"
+            journalctl -u sing-box -f --no-pager
+            disable_log
+            ;;
+        *) return ;;
     esac
-    read -n 1 -s -r -p "按任意键返回..."
 }
 
 uninstall_vrvw() {
-    echo "正在卸载 sing-box 和相关配置..."
-    systemctl stop sing-box
-    systemctl disable sing-box
-    rm -rf /etc/sing-box
-    rm -f /root/sbvw.sh
-    echo -e "${GREEN}卸载完成。${NC}"
+    read -p "$(echo -e ${RED}"警告：此操作将卸载 sing-box 及本脚本。WARP 不会被卸载。要删除配置文件吗? [Y/n]: "${NC})" confirm_delete
+    local keep_config=false
+    if [[ "${confirm_delete,,}" == "n" ]]; then
+        keep_config=true
+    fi
+    
+    systemctl stop sing-box &>/dev/null; systemctl disable sing-box &>/dev/null
+    local bin_path=$(command -v sing-box)
+    if [[ "$keep_config" == false ]]; then
+        echo "正在删除 sing-box 文件 (包括配置文件)..."
+        rm -rf /etc/sing-box
+    else
+        echo "正在删除 sing-box 核心组件 (保留配置文件)..."
+    fi
+    rm -f /etc/systemd/system/sing-box.service
+    if [[ -n "$bin_path" ]]; then rm -f "$bin_path"; fi
+    systemctl daemon-reload; rm -f "$INSTALL_PATH"
+    echo -e "${GREEN}Sing-Box-VRVW 已被移除。${NC}"
 }
 
 install_script_if_needed() {
@@ -370,18 +394,37 @@ install_script_if_needed() {
 }
 
 update_script() {
-    echo "正在检查更新..."
-    if wget -N --no-check-certificate "$SCRIPT_URL" -O "$INSTALL_PATH"; then
-        chmod +x "$INSTALL_PATH"
-        echo -e "${GREEN}脚本已更新，正在重启...${NC}"
-        exec bash "$INSTALL_PATH"
+    echo ">>> 正在检查脚本更新..."
+    local temp_script_path="/root/sbvw.sh.new"
+    if ! curl -fsSL "$SCRIPT_URL" -o "$temp_script_path"; then
+        echo -e "${RED}下载新版本脚本失败。${NC}"; rm -f "$temp_script_path"; return;
+    fi
+    
+    local new_version=$(grep 'SCRIPT_VERSION="[0-9.]*"' "$temp_script_path" | awk -F'"' '{print $2}')
+    if [[ -z "$new_version" ]]; then
+        echo -e "${RED}无法在新脚本中检测到版本号。为安全起见，已中止更新。${NC}"; rm -f "$temp_script_path"; return
+    fi
+    
+    if [[ "$SCRIPT_VERSION" != "$new_version" ]]; then
+        read -p "$(echo -e ${GREEN}"发现新版本 v${new_version}，是否更新? (y/N): "${NC})" confirm
+        if [[ "${confirm,,}" != "n" ]]; then
+            cat "$temp_script_path" > "$INSTALL_PATH"
+            chmod +x "$INSTALL_PATH"
+            rm -f "$temp_script_path"
+            echo -e "${GREEN}脚本已成功更新至 v${new_version}！${NC}"
+            echo "请重新运行 './sbvw.sh' 来使用新版本。"
+            exit 0
+        else
+            rm -f "$temp_script_path"
+        fi
     else
-        echo -e "${RED}脚本更新失败。${NC}"
+        echo -e "${GREEN}脚本已是最新版本 (v${SCRIPT_VERSION})。${NC}"; rm -f "$temp_script_path"
     fi
 }
 
 get_service_status() {
-    local service_name="$1"; local display_name="$2"
+    local service_name="$1"
+    local display_name="$2"
     if ! systemctl is-active --quiet "$service_name"; then
         printf "%-12s: %s\n" "$display_name" "$(echo -e ${RED}"已停止${NC}")"
     else
@@ -394,15 +437,15 @@ main_menu() {
     
     while true; do
         clear
-        local is_sbv_installed; is_sbv_installed=$([[ -f "$INFO_PATH_VRV" ]] && echo "true" || echo "false")
-        local is_sbvw_installed; is_sbvw_installed=$([[ -f "$INFO_PATH_VRVW" ]] && echo "true" || echo "false")
+        local is_sbv_installed=$([[ -f "$INFO_PATH_VRV" ]] && echo "true" || echo "false")
+        local is_sbvw_installed=$([[ -f "$INFO_PATH_VRVW" ]] && echo "true" || echo "false")
         
         echo "======================================================"
         echo "    Sing-Box VRV & WARP 统一管理平台 v${SCRIPT_VERSION}    "
         if [[ "$is_sbv_installed" == "true" || "$is_sbvw_installed" == "true" ]]; then
             echo "--------------------------------------------------"
             get_service_status "sing-box" "Sing-Box"
-            if systemctl status wireproxy &>/dev/null; then
+            if command -v warp &>/dev/null; then
                 get_service_status "wireproxy" "WireProxy"
             fi
         fi
@@ -415,9 +458,8 @@ main_menu() {
         fi
         echo "--- 管理选项 ---"
         echo " 4. 查看配置信息"
-        echo " 5. 更换 Reality 域名"
-        echo " 6. 管理 sing-box 服务"
-        echo " 7. 管理 WARP (调用 warp 命令)"
+        echo " 5. 管理 sing-box 服务"
+        echo " 6. 管理 WARP (调用 warp 命令)"
         echo "------------------------------------------------------"
         echo " 8. 检查脚本更新"
         echo " 9. 彻底卸载"
@@ -433,7 +475,8 @@ main_menu() {
                     upgrade_to_warp
                     exit 0
                 else
-                    echo -e "\n${RED}无效选项。${NC}"; sleep 1
+                    echo -e "\n${RED}无效选项。${NC}"
+                    sleep 1
                 fi
                 ;;
             4) 
@@ -442,13 +485,8 @@ main_menu() {
                 else echo -e "\n${RED}错误：请先安装。${NC}"; fi
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
-            5) 
-                if [[ "$is_sbv_installed" == "true" || "$is_sbvw_installed" == "true" ]]; then change_reality_domain;
-                else echo -e "\n${RED}错误：请先安装。${NC}"; fi
-                read -n 1 -s -r -p "按任意键返回主菜单..."
-                ;;
-            6) if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装。${NC}"; fi ;;
-            7) if command -v warp &>/dev/null; then warp; else echo -e "\n${RED}未检测到 warp 命令，请先安装 WARP。${NC}"; fi; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
+            5) if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装。${NC}"; fi ;;
+            6) if command -v warp &>/dev/null; then warp; else echo -e "\n${RED}未检测到 warp 命令，请先安装 WARP。${NC}"; fi; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
             8) update_script; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
             9) uninstall_vrvw; exit 0 ;;
             0) exit 0 ;;
@@ -457,7 +495,6 @@ main_menu() {
     done
 }
 
-# --- Script Entry Point ---
 check_root
 check_dependencies
 main_menu
