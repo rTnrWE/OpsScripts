@@ -545,13 +545,14 @@ main_menu() {
             echo -e " 3. ${GREEN}为现有 Sing-Box 添加 WARP (升级)${NC}"
         fi
         echo "--- 管理选项 ---"
-        echo " 4. 更新 Sing-Box Core"
-        echo " 5. 管理 Sing-Box 服务"
-        echo " 6. 更换 Reality 域名"
-        echo " 7. 管理 WARP (调用 warp 命令)"
+        echo " 4. 查看配置"
+        echo " 5. 更新 Sing-Box Core"
+        echo " 6. 管理 Sing-Box 服务"
+        echo " 7. 更换 Reality 域名"
+        echo " 8. 管理 WARP (调用 warp 命令)"
         echo "------------------------------------------------------"
-        echo " 8. 更新脚本"
-        echo " 9. 彻底卸载"
+        echo " 9. 更新脚本"
+        echo " 10. 彻底卸载"
         echo " 0. 退出脚本"
         echo "======================================================"
         read -p "请输入你的选项: " choice
@@ -569,6 +570,16 @@ main_menu() {
                 fi
                 ;;
             4)
+                if [[ -f "$CONFIG_PATH" ]]; then
+                    echo ">>> 当前配置文件内容 ($CONFIG_PATH):"
+                    cat "$CONFIG_PATH"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                else
+                    echo -e "\n${RED}错误：未找到配置文件，请先安装。${NC}"
+                    sleep 1
+                fi
+                ;;
+            5)
                 SINGBOX_BINARY=$(command -v sing-box)
                 if [[ -n "$SINGBOX_BINARY" ]]; then
                     current_version=$($SINGBOX_BINARY version | head -n 1)
@@ -592,11 +603,11 @@ main_menu() {
                     install_singbox_core
                 fi
                 ;;
-            5) if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装。${NC}"; fi ;;
-            6) change_reality_domain ;;
-            7) if command -v warp &>/dev/null; then warp; else echo -e "\n${RED}未检测到 warp 命令，请先安装 WARP。${NC}"; fi; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
-            8) update_script; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
-            9) uninstall_vrvw; exit 0 ;;
+            6) if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装。${NC}"; fi ;;
+            7) change_reality_domain ;;
+            8) if command -v warp &>/dev/null; then warp; else echo -e "\n${RED}未检测到 warp 命令，请先安装 WARP。${NC}"; fi; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
+            9) update_script; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
+            10) uninstall_vrvw; exit 0 ;;
             0) exit 0 ;;
             *) echo -e "\n${RED}无效选项。${NC}"; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
         esac
