@@ -5,7 +5,7 @@
 # Thanks: sing-box project (https://github.com/SagerNet/sing-box), fscarmen/warp-sh project (https://github.com/fscarmen/warp-sh)
 #===============================================================================
 
-SCRIPT_VERSION="2.3"
+SCRIPT_VERSION="2.4"
 INSTALL_PATH="/root/sbvw.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
@@ -240,7 +240,7 @@ check_and_toggle_log_status() {
         if [[ -z "$ans" ]]; then
             jq '.log.disabled = false' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
             systemctl restart sing-box
-            echo -e "${GREEN}日志已开启。${NC}"
+            echo -e "${RED}日志已开启。${NC}"
         else
             echo "保持日志已关闭。"
         fi
@@ -249,7 +249,7 @@ check_and_toggle_log_status() {
         if [[ -z "$ans" ]]; then
             jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
             systemctl restart sing-box
-            echo -e "${RED}日志已关闭。${NC}"
+            echo -e "${GREEN}日志已关闭。${NC}"
         else
             echo "保持日志已开启。"
         fi
@@ -381,14 +381,45 @@ upgrade_to_warp() {
     fi
 }
 
+update_script() {
+    local temp_script_path="/root/sbvw.sh.new"
+    if ! curl -fsSL "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh" -o "$temp_script_path"; then
+        echo -e "${RED}下载新版本脚本失败。${NC}"
+        rm -f "$temp_script_path"
+        return
+    fi
+    local new_version=$(grep 'SCRIPT_VERSION="' "$temp_script_path" | awk -F '"' '{print $2}')
+    if [[ -z "$new_version" ]]; then
+        echo -e "${RED}未检测到新脚本版本号，已中止更新。${NC}"
+        rm -f "$temp_script_path"
+        return
+    fi
+    if [[ "$SCRIPT_VERSION" != "$new_version" ]]; then
+        read -p "$(echo -e ${GREEN}发现新版本 v${new_version}，是否更新? (y/N): ${NC})" confirm
+        if [[ "${confirm,,}" != "n" ]]; then
+            cat "$temp_script_path" > "$INSTALL_PATH"
+            chmod +x "$INSTALL_PATH"
+            rm -f "$temp_script_path"
+            echo -e "${GREEN}脚本已成功更新至 v${new_version}！${NC}"
+            echo "请重新运行 ./sbvw.sh 使用新版本。"
+            exit 0
+        else
+            rm -f "$temp_script_path"
+        fi
+    else
+        echo -e "${GREEN}脚本已是最新版本 (v${SCRIPT_VERSION})。${NC}"
+        rm -f "$temp_script_path"
+    fi
+}
+
 manage_service() {
     clear
     local log_status=$(jq -r '.log.disabled' "$CONFIG_PATH" 2>/dev/null)
     local log_menu=""
     if [[ "$log_status" == "true" ]]; then
-        log_menu="6. 日志已关闭(${RED}已关闭${NC})"
+        log_menu="${GREEN}6. 日志已关闭${NC}"
     else
-        log_menu="6. 日志已开启(${GREEN}已开启${NC})"
+        log_menu="${RED}6. 日志已开启${NC}"
     fi
 
     echo "--- sing-box 服务管理 ---"
@@ -459,12 +490,12 @@ get_service_status() {
 main_menu() {
     install_script_if_needed
     auto_disable_log_on_start
-    
+
     while true; do
         clear
         local is_sbv_installed=$([[ -f "$INFO_PATH_VRV" ]] && echo "true" || echo "false")
         local is_sbvw_installed=$([[ -f "$INFO_PATH_VRVW" ]] && echo "true" || echo "false")
-        
+
         echo "======================================================"
         echo "    Sing-Box VRV & WARP 统一管理平台 v${SCRIPT_VERSION}    "
         if [[ "$is_sbv_installed" == "true" || "$is_sbvw_installed" == "true" ]]; then
@@ -487,7 +518,8 @@ main_menu() {
         echo " 6. 更换 Reality 域名"
         echo " 7. 管理 WARP (调用 warp 命令)"
         echo "------------------------------------------------------"
-        echo " 8. 彻底卸载"
+        echo " 8. 更新脚本"
+        echo " 9. 彻底卸载"
         echo " 0. 退出脚本"
         echo "======================================================"
         read -p "请输入你的选项: " choice
@@ -504,7 +536,7 @@ main_menu() {
                     sleep 1
                 fi
                 ;;
-            4) 
+            4)
                 if [[ "$is_sbv_installed" == "true" ]]; then show_summary "$INFO_PATH_VRV";
                 elif [[ "$is_sbvw_installed" == "true" ]]; then show_summary "$INFO_PATH_VRVW";
                 else echo -e "\n${RED}错误：请先安装。${NC}"; fi
@@ -513,7 +545,8 @@ main_menu() {
             5) if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装。${NC}"; fi ;;
             6) change_reality_domain ;;
             7) if command -v warp &>/dev/null; then warp; else echo -e "\n${RED}未检测到 warp 命令，请先安装 WARP。${NC}"; fi; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
-            8) uninstall_vrvw; exit 0 ;;
+            8) update_script; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
+            9) uninstall_vrvw; exit 0 ;;
             0) exit 0 ;;
             *) echo -e "\n${RED}无效选项。${NC}"; read -n 1 -s -r -p "按任意键返回主菜单..." ;;
         esac
