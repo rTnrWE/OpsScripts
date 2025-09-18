@@ -429,7 +429,7 @@ update_script() {
             chmod +x "$INSTALL_PATH"
             rm -f "$temp_script_path"
             echo -e "${GREEN}脚本已成功更新至 v${new_version}！${NC}"
-            echo "请重新运行 ./sbvw.sh 使用新版本。"
+            echo "请重新运行 ./sbvw.sh 使用新版本."
             exit 0
         else
             rm -f "$temp_script_path"
@@ -454,9 +454,9 @@ manage_service() {
     echo " 4. 查看状态"
     echo " 5. 查看实时日志"
     if [[ "$log_status" == "true" ]]; then
-        echo " 6. ${GREEN}日志已关闭${NC}"
+        echo " 6. 日志已关闭"
     else
-        echo " 6. ${RED}日志已开启${NC}"
+        echo " 6. 日志已开启"
     fi
     echo " 0. 返回主菜单"
     echo "-------------------------"
