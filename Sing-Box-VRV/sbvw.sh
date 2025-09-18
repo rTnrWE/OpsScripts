@@ -544,8 +544,8 @@ main_menu() {
             echo -e " 3. ${GREEN}为现有 Sing-Box 添加 WARP (升级)${NC}"
         fi
         echo "--- 管理选项 ---"
-        echo " 4. 查看配置信息"
-        echo " 5. 管理 sing-box 服务"
+        echo " 4. 更新Sing-Box Core"
+        echo " 5. 管理 Sing-Box 服务"
         echo " 6. 更换 Reality 域名"
         echo " 7. 管理 WARP (调用 warp 命令)"
         echo "------------------------------------------------------"
@@ -568,9 +568,7 @@ main_menu() {
                 fi
                 ;;
             4)
-                if [[ "$is_sbv_installed" == "true" ]]; then show_summary "$INFO_PATH_VRV";
-                elif [[ "$is_sbvw_installed" == "true" ]]; then show_summary "$INFO_PATH_VRVW";
-                else echo -e "\n${RED}错误：请先安装。${NC}"; fi
+                install_singbox_core
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             5) if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装。${NC}"; fi ;;
