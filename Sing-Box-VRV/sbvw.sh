@@ -442,14 +442,10 @@ update_script() {
 
 manage_service() {
     clear
-    local log_status=$(jq -r '.log.disabled' "$CONFIG_PATH" 2>/dev/null)
-    local log_menu=""
-    if [[ "$log_status" == "true" ]]; then
-        log_menu="${GREEN}6. 日志已关闭${NC}"
-    else
-        log_menu="${RED}6. 日志已开启${NC}"
+    local log_status=""
+    if [[ -f "$CONFIG_PATH" ]]; then
+        log_status=$(jq -r '.log.disabled' "$CONFIG_PATH" 2>/dev/null)
     fi
-
     echo "--- sing-box 服务管理 ---"
     echo "-------------------------"
     echo " 1. 重启服务"
@@ -457,7 +453,11 @@ manage_service() {
     echo " 3. 启动服务"
     echo " 4. 查看状态"
     echo " 5. 查看实时日志"
-    echo " $log_menu"
+    if [[ "$log_status" == "true" ]]; then
+        echo -e "${GREEN}6. 日志已关闭${NC}"
+    else
+        echo -e "${RED}6. 日志已开启${NC}"
+    fi
     echo " 0. 返回主菜单"
     echo "-------------------------"
     read -p "请输入选项: " sub_choice
@@ -474,7 +474,8 @@ manage_service() {
 }
 
 uninstall_vrvw() {
-    read -p "$(echo -e ${RED}警告：此操作将卸载 sing-box 及本脚本。WARP 不会被卸载。要删除配置文件吗? [Y/n]: ${NC})" confirm_delete
+    echo -e "${RED}警告：此操作将卸载 sing-box 及本脚本。WARP 不会被卸载。要删除配置文件吗? [Y/n]: ${NC}"
+    read -p "" confirm_delete
     local keep_config=false
     if [[ "${confirm_delete,,}" == "n" ]]; then
         keep_config=true
