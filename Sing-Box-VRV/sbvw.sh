@@ -570,15 +570,9 @@ main_menu() {
                 fi
                 ;;
             4)
-                if [[ -f "$INFO_PATH_VRV" ]]; then
-                    echo ">>> 当前标准版客户端配置信息:"
-                    show_client_config_format "$INFO_PATH_VRV"
-                elif [[ -f "$INFO_PATH_VRVW" ]]; then
-                    echo ">>> 当前 WARP 版客户端配置信息:"
-                    show_client_config_format "$INFO_PATH_VRVW"
-                else
-                    echo -e "\n${RED}错误：未找到配置信息文件，请先安装。${NC}"
-                fi
+                if [[ "$is_sbv_installed" == "true" ]]; then show_summary "$INFO_PATH_VRV";
+                elif [[ "$is_sbvw_installed" == "true" ]]; then show_summary "$INFO_PATH_VRVW";
+                else echo -e "\n${RED}错误：请先安装。${NC}"; fi
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             5)
