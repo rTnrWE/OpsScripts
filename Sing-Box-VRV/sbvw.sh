@@ -28,19 +28,19 @@ check_root() {
 
 check_dependencies() {
     for cmd in curl jq openssl wget ping ss; do
-        if ! command -v $cmd &> /dev/null; then
+        if ! command -v "$cmd" &> /dev/null; then
             echo "依赖 '$cmd' 未安装，正在尝试自动安装..."
             if command -v apt-get &> /dev/null; then
-                apt-get update >/dev/null && apt-get install -y $cmd dnsutils iproute2
+                apt-get update >/dev/null && apt-get install -y "$cmd" dnsutils iproute2
             elif command -v yum &> /dev/null; then
-                yum install -y $cmd bind-utils iproute
+                yum install -y "$cmd" bind-utils iproute
             elif command -v dnf &> /dev/null; then
-                dnf install -y $cmd bind-utils iproute
+                dnf install -y "$cmd" bind-utils iproute
             else
                 echo -e "${RED}无法确定包管理器。请手动安装 '$cmd'。${NC}"
                 exit 1
             fi
-            if ! command -v $cmd &> /dev/null; then
+            if ! command -v "$cmd" &> /dev/null; then
                 echo -e "${RED}错误：'$cmd' 自动安装失败。${NC}"
                 exit 1
             fi
@@ -69,6 +69,7 @@ install_singbox_core() {
         return 1
     fi
     echo -e "${GREEN}sing-box 核心安装成功！版本：$($SINGBOX_BINARY version | head -n 1)${NC}"
+    return 0
 }
 
 install_warp() {
@@ -103,7 +104,7 @@ check_reality_domain() {
     local success_count=0
     echo "正在检测 ${domain} 的 Reality 可用性（连续5次）..."
     for i in {1..5}; do
-        if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 https://$domain 2>&1 | grep -q "SSL connection using TLSv1.3"; then
+        if curl -vI --tlsv1.3 --tls-max 1.3 --connect-timeout 10 https://"$domain" 2>&1 | grep -q "SSL connection using TLSv1.3"; then
             echo -e "${GREEN}SUCCESS${NC}: $domain 第 $i 次检测通过。"
             ((success_count++))
         else
@@ -590,7 +591,6 @@ main_menu() {
                     echo ">>> 未检测到 Sing-Box 安装，执行首次安装..."
                     install_singbox_core
                 fi
-                read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             5) if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装。${NC}"; fi ;;
             6) change_reality_domain ;;
