@@ -186,7 +186,7 @@ generate_config() {
         "inbounds": [
           {
             "type": "vless",
-            "tag": "vless-in",
+            "tag":实际": "vless-in",
             "listen": $listen_addr,
             "listen_port": $listen_port,
             "sniff": true,
@@ -544,7 +544,7 @@ main_menu() {
             echo -e " 3. ${GREEN}为现有 Sing-Box 添加 WARP (升级)${NC}"
         fi
         echo "--- 管理选项 ---"
-        echo " 4. 更新Sing-Box Core"
+        echo " 4. 更新 Sing-Box Core"
         echo " 5. 管理 Sing-Box 服务"
         echo " 6. 更换 Reality 域名"
         echo " 7. 管理 WARP (调用 warp 命令)"
@@ -569,6 +569,17 @@ main_menu() {
                 ;;
             4)
                 install_singbox_core
+                if [[ $? -eq 0 ]]; then
+                    SINGBOX_BINARY=$(command -v sing-box)
+                    if [[ -n "$SINGBOX_BINARY" ]]; then
+                        current_version=$($SINGBOX_BINARY version | head -n 1)
+                        echo -e "${GREEN}当前 Sing-Box 版本: $current_version${NC}"
+                        read -p "已是最新版本，按 Enter 返回主菜单，或输入 'r' 重装最新稳定版: " reinstall_choice
+                        if [[ "${reinstall_choice,,}" == "r" ]]; then
+                            install_singbox_core
+                        fi
+                    fi
+                fi
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             5) if [[ -f "$CONFIG_PATH" ]]; then manage_service; else echo -e "\n${RED}错误：请先安装。${NC}"; fi ;;
