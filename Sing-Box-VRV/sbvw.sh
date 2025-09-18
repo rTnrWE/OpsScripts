@@ -5,7 +5,7 @@
 # Thanks: sing-box project (https://github.com/SagerNet/sing-box), fscarmen/warp-sh project (https://github.com/fscarmen/warp-sh)
 #===============================================================================
 
-SCRIPT_VERSION="2.2"
+SCRIPT_VERSION="2.3"
 INSTALL_PATH="/root/sbvw.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
@@ -229,6 +229,34 @@ view_log() {
     systemctl restart sing-box
 }
 
+check_and_toggle_log_status() {
+    if [[ ! -f "$CONFIG_PATH" ]]; then
+        echo -e "${RED}未找到配置文件。${NC}"
+        return
+    fi
+    local status=$(jq -r '.log.disabled' "$CONFIG_PATH")
+    if [[ "$status" == "true" ]]; then
+        read -p "按回车开启日志，输入 n 保持关闭: " ans
+        if [[ -z "$ans" ]]; then
+            jq '.log.disabled = false' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+            systemctl restart sing-box
+            echo -e "${GREEN}日志已开启。${NC}"
+        else
+            echo "保持日志已关闭。"
+        fi
+    else
+        read -p "按回车关闭日志，输入 n 保持开启: " ans
+        if [[ -z "$ans" ]]; then
+            jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+            systemctl restart sing-box
+            echo -e "${RED}日志已关闭。${NC}"
+        else
+            echo "保持日志已开启。"
+        fi
+    fi
+    sleep 1
+}
+
 change_reality_domain() {
     while true; do
         echo -en "${GREEN}请输入新的 Reality 域名（示例：www.bing.com）: ${NC}"
@@ -355,6 +383,14 @@ upgrade_to_warp() {
 
 manage_service() {
     clear
+    local log_status=$(jq -r '.log.disabled' "$CONFIG_PATH" 2>/dev/null)
+    local log_menu=""
+    if [[ "$log_status" == "true" ]]; then
+        log_menu="6. 日志已关闭(${RED}已关闭${NC})"
+    else
+        log_menu="6. 日志已开启(${GREEN}已开启${NC})"
+    fi
+
     echo "--- sing-box 服务管理 ---"
     echo "-------------------------"
     echo " 1. 重启服务"
@@ -362,6 +398,7 @@ manage_service() {
     echo " 3. 启动服务"
     echo " 4. 查看状态"
     echo " 5. 查看实时日志"
+    echo " $log_menu"
     echo " 0. 返回主菜单"
     echo "-------------------------"
     read -p "请输入选项: " sub_choice
@@ -369,16 +406,11 @@ manage_service() {
         1) systemctl restart sing-box; echo -e "${GREEN}sing-box 服务已重启。${NC}"; sleep 1 ;;
         2) systemctl stop sing-box; echo "sing-box 服务已停止。"; sleep 1 ;;
         3) systemctl start sing-box; echo -e "${GREEN}sing-box 服务已启动。${NC}"; sleep 1 ;;
-        4) 
-            echo "---"
-            systemctl status sing-box
-            echo "---"
-            read -n 1 -s -r -p "按任意键返回服务菜单..."
-            ;;
-        5)
-            view_log
-            ;;
-        *) return ;;
+        4) systemctl status sing-box; read -n 1 -s -r -p "按任意键返回服务菜单..." ;;
+        5) view_log ;;
+        6) check_and_toggle_log_status ;;
+        0) return ;;
+        *) echo -e "\n${RED}无效选项。${NC}"; sleep 1 ;;
     esac
 }
 
