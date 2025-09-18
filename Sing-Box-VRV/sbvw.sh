@@ -92,7 +92,7 @@ install_warp() {
     bash "$warp_installer" w
     if ! systemctl is-active --quiet wireproxy; then
         echo -e "${RED}错误：检测到 WireProxy 服务未成功启动。${NC}"
-        echo "请再次运行本脚本，选择 '7. 管理 WARP'，并确保 WireProxy 正常工作。"
+        echo "请再次运行本脚本，选择 '8. 管理 WARP'，并确保 WireProxy 正常工作。"
         return 1
     fi
     echo -e "${GREEN}检测到 WireProxy 已成功安装并运行！${NC}"
@@ -545,7 +545,7 @@ main_menu() {
             echo -e " 3. ${GREEN}为现有 Sing-Box 添加 WARP (升级)${NC}"
         fi
         echo "--- 管理选项 ---"
-        echo " 4. 查看配置"
+        echo " 4. 查看配置信息"
         echo " 5. 更新 Sing-Box Core"
         echo " 6. 管理 Sing-Box 服务"
         echo " 7. 更换 Reality 域名"
@@ -570,14 +570,16 @@ main_menu() {
                 fi
                 ;;
             4)
-                if [[ -f "$CONFIG_PATH" ]]; then
-                    echo ">>> 当前配置文件内容 ($CONFIG_PATH):"
-                    cat "$CONFIG_PATH"
-                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                if [[ -f "$INFO_PATH_VRV" ]]; then
+                    echo ">>> 当前标准版客户端配置信息:"
+                    show_client_config_format "$INFO_PATH_VRV"
+                elif [[ -f "$INFO_PATH_VRVW" ]]; then
+                    echo ">>> 当前 WARP 版客户端配置信息:"
+                    show_client_config_format "$INFO_PATH_VRVW"
                 else
-                    echo -e "\n${RED}错误：未找到配置文件，请先安装。${NC}"
-                    sleep 1
+                    echo -e "\n${RED}错误：未找到配置信息文件，请先安装。${NC}"
                 fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             5)
                 SINGBOX_BINARY=$(command -v sing-box)
