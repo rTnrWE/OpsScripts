@@ -5,10 +5,12 @@
 # Thanks: sing-box project (https://github.com/SagerNet/sing-box), fscarmen/warp-sh project (https://github.com/fscarmen/warp-sh)
 #===============================================================================
 
-SCRIPT_VERSION="2.4"
+SCRIPT_VERSION="2.2.1"
 INSTALL_PATH="/root/sbvw.sh"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
 CONFIG_PATH="/etc/sing-box/config.json"
 INFO_PATH_VRV="/etc/sing-box/vrv_info.env"
 INFO_PATH_VRVW="/etc/sing-box/vrvw_info.env"
@@ -17,17 +19,31 @@ WARP_SCRIPT_URL="https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh"
 
 trap 'echo -en "${NC}"' EXIT
 
-check_root() { [[ "$EUID" -ne 0 ]] && { echo -e "${RED}错误：此脚本必须以 root 权限运行。${NC}"; exit 1; }; }
+check_root() {
+    if [[ "$EUID" -ne 0 ]]; then
+        echo -e "${RED}错误：此脚本必须以 root 权限运行。${NC}"
+        exit 1
+    fi
+}
 
 check_dependencies() {
     for cmd in curl jq openssl wget ping ss; do
         if ! command -v $cmd &> /dev/null; then
             echo "依赖 '$cmd' 未安装，正在尝试自动安装..."
-            if command -v apt-get &> /dev/null; then apt-get update >/dev/null && apt-get install -y $cmd dnsutils iproute2
-            elif command -v yum &> /dev/null; then yum install -y $cmd bind-utils iproute
-            elif command -v dnf &> /dev/null; then dnf install -y $cmd bind-utils iproute
-            else echo -e "${RED}无法确定包管理器。请手动安装 '$cmd'。${NC}"; exit 1; fi
-            if ! command -v $cmd &> /dev/null; then echo -e "${RED}错误：'$cmd' 自动安装失败。${NC}"; exit 1; fi
+            if command -v apt-get &> /dev/null; then
+                apt-get update >/dev/null && apt-get install -y $cmd dnsutils iproute2
+            elif command -v yum &> /dev/null; then
+                yum install -y $cmd bind-utils iproute
+            elif command -v dnf &> /dev/null; then
+                dnf install -y $cmd bind-utils iproute
+            else
+                echo -e "${RED}无法确定包管理器。请手动安装 '$cmd'。${NC}"
+                exit 1
+            fi
+            if ! command -v $cmd &> /dev/null; then
+                echo -e "${RED}错误：'$cmd' 自动安装失败。${NC}"
+                exit 1
+            fi
         fi
     done
 }
@@ -43,9 +59,15 @@ check_tfo_status() {
 
 install_singbox_core() {
     echo ">>> 正在安装/更新 sing-box 最新稳定版..."
-    if ! bash <(curl -fsSL https://sing-box.app/deb-install.sh); then echo -e "${RED}sing-box 核心安装失败。${NC}"; return 1; fi
+    if ! bash <(curl -fsSL https://sing-box.app/deb-install.sh); then
+        echo -e "${RED}sing-box 核心安装失败。${NC}"
+        return 1
+    fi
     SINGBOX_BINARY=$(command -v sing-box)
-    if [[ -z "$SINGBOX_BINARY" ]]; then echo -e "${RED}错误：未能找到 sing-box 可执行文件。${NC}"; return 1; fi
+    if [[ -z "$SINGBOX_BINARY" ]]; then
+        echo -e "${RED}错误：未能找到 sing-box 可执行文件。${NC}"
+        return 1
+    fi
     echo -e "${GREEN}sing-box 核心安装成功！版本：$($SINGBOX_BINARY version | head -n 1)${NC}"
 }
 
@@ -151,7 +173,6 @@ generate_config() {
         }'
     fi
 
-    # 配置文件日志功能始终关闭
     jq -n \
       --arg listen_addr "$listen_addr" \
       --argjson listen_port "$listen_port" \
@@ -284,7 +305,12 @@ change_reality_domain() {
 start_service() {
     echo ">>> 正在启动并设置 sing-box 开机自启..."
     systemctl daemon-reload; systemctl enable sing-box >/dev/null 2>&1; systemctl restart sing-box; sleep 2
-    if systemctl is-active --quiet sing-box; then echo -e "${GREEN}sing-box 服务已成功启动！${NC}"; else echo -e "${RED}错误：sing-box 服务启动失败。${NC}"; return 1; fi
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}sing-box 服务已成功启动！${NC}"
+    else
+        echo -e "${RED}错误：sing-box 服务启动失败。${NC}"
+        return 1
+    fi
 }
 
 show_client_config_format() {
@@ -377,7 +403,8 @@ upgrade_to_warp() {
         show_summary "$INFO_PATH_VRVW"
         echo -e "\n${GREEN}--- 升级成功 ---${NC}"
     else
-        echo -e "${RED}错误：sing-box 服务重启失败。${NC}"; return 1
+        echo -e "${RED}错误：sing-box 服务重启失败。${NC}"
+        return 1
     fi
 }
 
@@ -395,7 +422,8 @@ update_script() {
         return
     fi
     if [[ "$SCRIPT_VERSION" != "$new_version" ]]; then
-        read -p "$(echo -e ${GREEN}发现新版本 v${new_version}，是否更新? (y/N): ${NC})" confirm
+        echo -e "${GREEN}发现新版本 v${new_version}，是否更新? (y/N): ${NC}"
+        read -p "" confirm
         if [[ "${confirm,,}" != "n" ]]; then
             cat "$temp_script_path" > "$INSTALL_PATH"
             chmod +x "$INSTALL_PATH"
@@ -446,12 +474,13 @@ manage_service() {
 }
 
 uninstall_vrvw() {
-    read -p "$(echo -e ${RED}"警告：此操作将卸载 sing-box 及本脚本。WARP 不会被卸载。要删除配置文件吗? [Y/n]: "${NC})" confirm_delete
+    read -p "$(echo -e ${RED}警告：此操作将卸载 sing-box 及本脚本。WARP 不会被卸载。要删除配置文件吗? [Y/n]: ${NC})" confirm_delete
     local keep_config=false
     if [[ "${confirm_delete,,}" == "n" ]]; then
         keep_config=true
     fi
-    systemctl stop sing-box &>/dev/null; systemctl disable sing-box &>/dev/null
+    systemctl stop sing-box &>/dev/null
+    systemctl disable sing-box &>/dev/null
     local bin_path=$(command -v sing-box)
     if [[ "$keep_config" == false ]]; then
         echo "正在删除 sing-box 文件 (包括配置文件)..."
@@ -461,7 +490,8 @@ uninstall_vrvw() {
     fi
     rm -f /etc/systemd/system/sing-box.service
     if [[ -n "$bin_path" ]]; then rm -f "$bin_path"; fi
-    systemctl daemon-reload; rm -f "$INSTALL_PATH"
+    systemctl daemon-reload
+    rm -f "$INSTALL_PATH"
     echo -e "${GREEN}Sing-Box-VRVW 已被移除。${NC}"
 }
 
@@ -481,9 +511,9 @@ get_service_status() {
     local service_name="$1"
     local display_name="$2"
     if ! systemctl is-active --quiet "$service_name"; then
-        printf "%-12s: %s\n" "$display_name" "$(echo -e ${RED}"已停止${NC}")"
+        printf "%-12s: %s\n" "$display_name" "$(echo -e ${RED}已停止${NC})"
     else
-        printf "%-12s: %s\n" "$display_name" "$(echo -e ${GREEN}"运行中${NC}")"
+        printf "%-12s: %s\n" "$display_name" "$(echo -e ${GREEN}运行中${NC})"
     fi
 }
 
