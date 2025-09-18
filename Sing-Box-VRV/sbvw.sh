@@ -186,7 +186,7 @@ generate_config() {
         "inbounds": [
           {
             "type": "vless",
-            "tag":实际": "vless-in",
+            "tag": "vless-in",
             "listen": $listen_addr,
             "listen_port": $listen_port,
             "sniff": true,
@@ -568,17 +568,27 @@ main_menu() {
                 fi
                 ;;
             4)
-                install_singbox_core
-                if [[ $? -eq 0 ]]; then
-                    SINGBOX_BINARY=$(command -v sing-box)
-                    if [[ -n "$SINGBOX_BINARY" ]]; then
-                        current_version=$($SINGBOX_BINARY version | head -n 1)
-                        echo -e "${GREEN}当前 Sing-Box 版本: $current_version${NC}"
-                        read -p "已是最新版本，按 Enter 返回主菜单，或输入 'r' 重装最新稳定版: " reinstall_choice
+                SINGBOX_BINARY=$(command -v sing-box)
+                if [[ -n "$SINGBOX_BINARY" ]]; then
+                    current_version=$($SINGBOX_BINARY version | head -n 1)
+                    echo ">>> 检测当前 Sing-Box 版本: $current_version"
+                    # Fetch the latest version info from the install script
+                    latest_install_script=$(curl -fsSL https://sing-box.app/deb-install.sh)
+                    latest_version=$(echo "$latest_install_script" | grep -oP 'sing-box_version="\K[^"]+')
+                    if [[ -n "$latest_version" && "$current_version" != *"$latest_version"* ]]; then
+                        echo ">>> 检测到新版本 $latest_version，执行更新..."
+                        install_singbox_core
+                    else
+                        echo -e "${GREEN}当前 Sing-Box 已是最新版本 ($current_version)。${NC}"
+                        read -p "按 Enter 返回主菜单，或输入 'r' 强制重装最新稳定版: " reinstall_choice
                         if [[ "${reinstall_choice,,}" == "r" ]]; then
+                            echo ">>> 强制重装 Sing-Box 最新稳定版..."
                             install_singbox_core
                         fi
                     fi
+                else
+                    echo ">>> 未检测到 Sing-Box 安装，执行首次安装..."
+                    install_singbox_core
                 fi
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
