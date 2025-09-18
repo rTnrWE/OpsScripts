@@ -454,9 +454,9 @@ manage_service() {
     echo " 4. 查看状态"
     echo " 5. 查看实时日志"
     if [[ "$log_status" == "true" ]]; then
-        echo " 6. 日志已关闭"
+        echo " 6. ${GREEN}日志已关闭${NC}"
     else
-        echo -e "${RED}6. 日志已开启${NC}"
+        echo " 6. ${RED}日志已开启${NC}"
     fi
     echo " 0. 返回主菜单"
     echo "-------------------------"
