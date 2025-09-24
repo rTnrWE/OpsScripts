@@ -289,6 +289,12 @@ change_reality_domain() {
             jq --arg new_domain "$new_domain" \
                 '.inbounds[0].tls.server_name = $new_domain | .inbounds[0].tls.reality.handshake.server = $new_domain' \
                 "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+            # Update the corresponding info file with the new handshake server
+            if [[ -f "$INFO_PATH_VRV" ]]; then
+                sed -i "s/^HANDSHAKE_SERVER=.*/HANDSHAKE_SERVER=$new_domain/" "$INFO_PATH_VRV"
+            elif [[ -f "$INFO_PATH_VRVW" ]]; then
+                sed -i "s/^HANDSHAKE_SERVER=.*/HANDSHAKE_SERVER=$new_domain/" "$INFO_PATH_VRVW"
+            fi
             systemctl restart sing-box
             echo -e "${GREEN}Reality 域名已更换并重启 sing-box。${NC}"
             break
