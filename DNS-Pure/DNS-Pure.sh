@@ -1,21 +1,22 @@
 #!/bin/bash
 #
-# Description: Persistently set DNS on Debian 12 using systemd-resolved.
-# Author: Your Name
-# Version: 1.0
+# Name: DNS-Pure.sh
+# Description: Persistently set a clean DNS on Debian/Ubuntu using systemd-resolved.
+# Author: rTnrWE (Enhanced by Gemini)
+# Version: 1.1 - Added resiliency for non-responsive service.
 #
 # This script will:
 # 1. Check for root privileges.
 # 2. Ensure systemd-resolved is installed.
-# 3. Check if the DNS is already correctly configured.
-# 4. If not, apply the new DNS settings (8.8.8.8, 1.1.1.1) and disable search domains.
-# 5. Verify the final configuration.
+# 3. Check if the systemd-resolved service is responsive and auto-repair if not.
+# 4. Check if the DNS is already correctly configured.
+# 5. If not, apply the new DNS settings (8.8.8.8, 1.1.1.1) and disable search domains.
+# 6. Verify the final configuration.
 
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
 # --- Configuration ---
-# Set your desired target DNS servers here.
 readonly TARGET_DNS="8.8.8.8 1.1.1.1"
 # ---------------------
 
@@ -36,17 +37,43 @@ main() {
     # 2. Ensure systemd-resolved is installed
     if ! command -v resolvectl &> /dev/null; then
         echo -e "${YELLOW}--> 检测到 systemd-resolved 未安装，正在自动安装...${NC}"
-        # Suppress unnecessary output with > /dev/null
-        apt-get update -y > /dev/null
+        # Correct time issues before proceeding with apt
+        if ! apt-get update -y > /dev/null; then
+            echo -e "${YELLOW}--> 'apt-get update' 失败，可能是系统时间不正确。正在尝试修复...${NC}"
+            apt-get install -y ntpdate > /dev/null && ntpdate time.google.com && echo -e "${GREEN}--> ✅ 系统时间已同步。${NC}" || echo -e "${RED}--> 自动时间同步失败，请手动修复时间后重试。${NC}"
+            apt-get update -y > /dev/null
+        fi
         apt-get install -y systemd-resolved > /dev/null
         systemctl enable --now systemd-resolved
         echo -e "${GREEN}--> ✅ systemd-resolved 安装并启动成功。${NC}"
     else
-        echo -e "${GREEN}--> systemd-resolved 已安装，继续执行检查。${NC}"
+        echo -e "${GREEN}--> systemd-resolved 已安装。${NC}"
     fi
 
-    # 3. Check current DNS and Domain configuration
-    # Use awk for more robust parsing of resolvectl's output
+    # 3. NEW: Resiliency check and auto-repair for the service
+    echo "--> 正在检查 systemd-resolved 服务响应..."
+    if ! resolvectl status &> /dev/null; then
+        echo -e "${YELLOW}--> 服务未响应。正在尝试强制重新初始化...${NC}"
+        
+        # The re-initialization sequence
+        systemctl stop systemd-resolved &> /dev/null || true # Ignore error if already stopped
+        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+        systemctl start systemd-resolved
+        sleep 2 # Give it a moment to initialize
+        
+        # Final check after the repair attempt
+        if ! resolvectl status &> /dev/null; then
+            echo -e "${RED}错误：强制初始化后，systemd-resolved 服务仍然无法启动或响应。${NC}"
+            echo -e "${RED}请手动运行 'systemctl status systemd-resolved' 和 'journalctl -u systemd-resolved' 来诊断问题。${NC}"
+            exit 1
+        else
+            echo -e "${GREEN}--> ✅ 服务已成功初始化并响应。${NC}"
+        fi
+    else
+         echo -e "${GREEN}--> ✅ systemd-resolved 服务响应正常。${NC}"
+    fi
+
+    # 4. Check current DNS and Domain configuration
     local current_dns
     current_dns=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Servers:/) {sub("DNS Servers: ", ""); print}}' | tr -s ' ')
     
@@ -62,19 +89,16 @@ main() {
         exit 0
     fi
 
-    # 4. Apply new configuration
+    # 5. Apply new configuration
     echo -e "\n${YELLOW}--> DNS 配置不匹配，开始执行修改...${NC}"
-    # Create/overwrite the configuration file
     echo -e "[Resolve]\nDNS=${TARGET_DNS}\nDomains=" > /etc/systemd/resolved.conf
-    # Ensure the resolv.conf symlink is correct
+    # The symlink is already set during the resiliency check, but we do it again for consistency
     ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-    # Restart the service to apply changes
     systemctl restart systemd-resolved
-    # Brief pause to allow the service to settle
     sleep 1
     echo -e "${GREEN}--> ✅ DNS 配置修改并重启服务成功。${NC}"
 
-    # 5. Final verification
+    # 6. Final verification
     echo -e "\n${GREEN}✅ 全部操作完成！以下是更新后的 DNS 状态：${NC}"
     echo "----------------------------------------------------"
     resolvectl status
