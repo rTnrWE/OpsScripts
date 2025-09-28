@@ -3,15 +3,13 @@
 # Name: DNS-Pure.sh
 # Description: Idempotent script to persistently set a clean DNS on Debian/Ubuntu.
 # Author: rTnrWE (Enhanced by Gemini)
-# Version: 1.2 - Optimized logic to check final state first.
+# Version: 1.3 - Enhanced feedback on initial check.
 #
 # This script will:
 # 1. First, check if the system's DNS is already the desired pure state.
 # 2. If it is, exit immediately with a success message.
-# 3. If not, proceed with a resilient process to:
-#    a. Install systemd-resolved if missing.
-#    b. Repair the service if it's unresponsive.
-#    c. Apply the target DNS configuration.
+# 3. If not, provide specific reasons for the failure, then proceed with a
+#    resilient process to fix the configuration.
 # 4. Finally, verify the result.
 
 # Exit immediately if a command exits with a non-zero status.
@@ -35,9 +33,8 @@ main() {
        exit 1
     fi
 
-    # 2. OPTIMIZED: Check the final state first.
+    # 2. OPTIMIZED: Check the final state first with detailed feedback.
     echo "--> 正在进行首要检查：系统DNS是否已是纯净状态..."
-    # We check if resolvectl exists and is responsive in one go.
     if command -v resolvectl &> /dev/null && resolvectl status &> /dev/null; then
         local current_dns
         current_dns=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Servers:/) {sub("DNS Servers: ", ""); print}}' | tr -s ' ')
@@ -45,15 +42,25 @@ main() {
         local current_domains
         current_domains=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Domain:/) {sub("DNS Domain: ", ""); print}}')
 
+        # Check if both conditions are met
         if [[ "${current_dns}" == "${TARGET_DNS}" ]] && [[ -z "${current_domains}" ]]; then
             echo -e "\n${GREEN}✅ 状态完美！系统DNS已是 ${TARGET_DNS} 且无搜索域。无需任何操作。${NC}"
             exit 0
         else
-            echo -e "${YELLOW}--> DNS配置不符合目标。将执行修正流程...${NC}"
+            # NEW: Provide specific reasons for failure
+            echo -e "${YELLOW}--> 检查未通过。原因如下：${NC}"
+            if [[ "${current_dns}" != "${TARGET_DNS}" ]]; then
+                echo -e "${YELLOW}    - 当前DNS为 [${current_dns:-未设置}]，与目标 [${TARGET_DNS}] 不符。${NC}"
+            fi
+            if [[ -n "${current_domains}" ]]; then
+                echo -e "${YELLOW}    - 检测到不必要的搜索域：[${current_domains}]。${NC}"
+            fi
         fi
     else
-        echo -e "${YELLOW}--> systemd-resolved 未安装或服务无响应。将执行修正流程...${NC}"
+        echo -e "${YELLOW}--> 检查失败：systemd-resolved 未安装或服务无响应。${NC}"
     fi
+    
+    echo -e "${YELLOW}--> 基于以上原因，将开始执行DNS净化流程...${NC}"
 
     # --- ACTION PHASE ---
     # This part only runs if the initial check fails.
@@ -62,10 +69,8 @@ main() {
     # 3. Ensure systemd-resolved is installed
     if ! command -v resolvectl &> /dev/null; then
         echo "--> 正在安装 systemd-resolved..."
-        # Correct time issues before proceeding with apt
         if ! apt-get update -y > /dev/null; then
             echo -e "${YELLOW}--> 'apt-get update' 失败，尝试通过 ntpdate 同步时间...${NC}"
-            # Install ntpdate if not present, then sync. Fallback message on failure.
             (apt-get install -y ntpdate > /dev/null && ntpdate -s time.google.com && echo -e "${GREEN}--> ✅ 系统时间已同步。${NC}") || \
             (echo -e "${RED}--> 自动时间同步失败，请手动修复时间后重试。${NC}" && exit 1)
             apt-get update -y > /dev/null
