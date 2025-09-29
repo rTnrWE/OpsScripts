@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # Name:         DNS-Pure.sh
-# Description:  Intelligently checks system state. If systemd-resolved is active,
-#               it validates and enforces a pure DNS configuration. If not, it
-#               reports the state of /etc/resolv.conf and asks for confirmation
-#               before taking action.
-# Version:      2.1
+# Description:  An intelligent script that purifies and hardens the system's DNS
+#               by optimally configuring systemd-resolved. It prioritizes
+#               DNS over TLS (DoT) and other security best practices for servers.
+# Author:       rTnrWE
+# Version:      2.2
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -14,17 +14,24 @@
 # --- Script Configuration and Safety ---
 set -euo pipefail
 
-# --- Global Constants ---
-readonly TARGET_DNS="8.8.8.8 1.1.1.1"
+# --- Global Constants: The Ultimate Secure DNS Configuration ---
+readonly TARGET_DNS="8.8.8.8#dns.google 1.1.1.1#cloudflare-dns.com"
+readonly SECURE_RESOLVED_CONFIG="[Resolve]
+DNS=${TARGET_DNS}
+LLMNR=no
+MulticastDNS=no
+DNSSEC=allow-downgrade
+DNSOverTLS=yes
+"
 readonly GREEN="\033[0;32m"
 readonly YELLOW="\033[1;33m"
 readonly RED="\033[0;31m"
 readonly NC="\033[0m" # No Color
 
 # --- Helper Functions ---
-# This function contains the full installation and configuration logic.
-purify_with_systemd_resolved() {
-    echo -e "\n--- 开始执行DNS净化流程 ---"
+# This function contains the full installation and hardening logic.
+purify_and_harden_dns() {
+    echo -e "\n--- 开始执行DNS净化与安全加固流程 ---"
 
     # 1. Ensure systemd-resolved is installed.
     if ! command -v resolvectl &> /dev/null; then
@@ -62,18 +69,22 @@ purify_with_systemd_resolved() {
          echo -e "${GREEN}--> ✅ 服务响应正常。${NC}"
     fi
 
-    # 3. Apply new configuration.
-    echo "--> 正在应用纯净DNS配置..."
-    echo -e "[Resolve]\nDNS=${TARGET_DNS}\nDomains=" > /etc/systemd/resolved.conf
+    # 3. Apply the ultimate secure configuration.
+    echo "--> 正在应用安全优化配置 (DoT, DNSSEC, No-LLMNR)..."
+    # Use echo with a variable to write the multi-line configuration
+    echo -e "${SECURE_RESOLVED_CONFIG}" > /etc/systemd/resolved.conf
+    # Ensure the symlink is correct
     ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
     systemctl restart systemd-resolved
     sleep 1
-    echo -e "${GREEN}--> ✅ DNS 配置修改并重启服务成功。${NC}"
+    echo -e "${GREEN}--> ✅ DNS 安全配置已应用并重启服务。${NC}"
 
     # 4. Final verification.
     echo -e "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}"
     echo "----------------------------------------------------"
     resolvectl status
+    echo "----------------------------------------------------"
+    echo -e "${GREEN}请检查上面的 'DNS Servers' 是否为 '${TARGET_DNS}' 并确认 'DNSSEC' 和 'DNSOverTLS' 的状态。${NC}"
 }
 
 
@@ -95,16 +106,26 @@ main() {
         local current_dns
         current_dns=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Servers:/) {sub("DNS Servers: ", ""); print}}' | tr -s ' ')
         
-        local current_domains
-        current_domains=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Domain:/) {sub("DNS Domain: ", ""); print}}')
+        # Check all security parameters for idempotency
+        local current_llmnr
+        current_llmnr=$(grep -E '^\s*LLMNR=' /etc/systemd/resolved.conf | tail -n1 | cut -d= -f2 || echo "default")
+        local current_mdns
+        current_mdns=$(grep -E '^\s*MulticastDNS=' /etc/systemd/resolved.conf | tail -n1 | cut -d= -f2 || echo "default")
+        local current_dnssec
+        current_dnssec=$(grep -E '^\s*DNSSEC=' /etc/systemd/resolved.conf | tail -n1 | cut -d= -f2 || echo "default")
+        local current_dot
+        current_dot=$(grep -E '^\s*DNSOverTLS=' /etc/systemd/resolved.conf | tail -n1 | cut -d= -f2 || echo "default")
 
-        if [[ "${current_dns}" == "${TARGET_DNS}" ]] && [[ -z "${current_domains}" ]]; then
-            echo -e "\n${GREEN}✅ 状态完美！systemd-resolved 已配置为 [${TARGET_DNS}] 且无搜索域。无需操作。${NC}"
+        if [[ "${current_dns}" == "${TARGET_DNS}" ]] && \
+           [[ "${current_llmnr,,}" == "no" ]] && \
+           [[ "${current_mdns,,}" == "no" ]] && \
+           [[ "${current_dnssec,,}" == "allow-downgrade" ]] && \
+           [[ "${current_dot,,}" == "yes" ]]; then
+            echo -e "\n${GREEN}✅ 状态完美！系统已应用最终的安全DNS配置。无需操作。${NC}"
             exit 0
         else
-            echo -e "${YELLOW}--> 配置不符。当前DNS为 [${current_dns:-未设置}]，搜索域为 [${current_domains:-无}]。${NC}"
-            echo -e "${YELLOW}--> 将自动执行净化操作...${NC}"
-            purify_with_systemd_resolved
+            echo -e "${YELLOW}--> 当前配置不符合最终安全目标。将自动执行净化与加固...${NC}"
+            purify_and_harden_dns
         fi
     else
         # --- PIPELINE B: systemd-resolved is NOT ACTIVE ---
@@ -130,11 +151,11 @@ main() {
         fi
 
         echo # Add a blank line for readability
-        read -p "您是否要安装并启用 systemd-resolved 来将DNS持久化设置为 [${TARGET_DNS}]？(y/N): " -r user_choice
+        read -p "您是否要安装并配置 systemd-resolved 以应用最终的安全DNS方案？(y/N): " -r user_choice
         user_choice=${user_choice,,} 
 
         if [[ "$user_choice" == "y" || "$user_choice" == "yes" ]]; then
-            purify_with_systemd_resolved
+            purify_and_harden_dns
         else
             echo -e "${YELLOW}操作被用户取消。脚本退出。${NC}"
             exit 0
