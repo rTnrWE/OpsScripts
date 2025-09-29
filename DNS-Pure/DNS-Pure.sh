@@ -3,10 +3,9 @@
 # Name:         DNS-Pure.sh
 # Description:  An intelligent and resilient script that purifies, hardens,
 #               and persistently configures the system's DNS using systemd-resolved.
-#               It actively cleans up legacy network configurations and enforces
-#               security best practices like DNS over TLS (DoT) and DNSSEC.
+#               It provides clear, user-friendly communication at every step.
 # Author:       rTnrWE
-# Version:      2.3
+# Version:      2.5
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -35,11 +34,8 @@ readonly NC="\033[0m" # No Color
 purge_legacy_dns_settings() {
     local interfaces_file="/etc/network/interfaces"
     if [[ -f "$interfaces_file" ]]; then
-        # Check if there's anything to do before proceeding
         if grep -qE '^[[:space:]]*dns-(nameservers|search|domain)' "$interfaces_file"; then
             echo "--> 正在净化 /etc/network/interfaces 中的厂商残留DNS配置..."
-            # Use sed to comment out any line starting with dns- followed by nameservers, search, or domain
-            # This is idempotent; it won't re-comment already commented lines.
             sed -i -E 's/^[[:space:]]*(dns-(nameservers|search|domain).*)/# \1/' "$interfaces_file"
             echo -e "${GREEN}--> ✅ 旧有DNS配置已成功注释禁用。${NC}"
         else
@@ -111,23 +107,18 @@ purify_and_harden_dns() {
 
 # --- Main Logic ---
 main() {
-    # 1. Check for root privileges first.
     if [[ $EUID -ne 0 ]]; then
        echo -e "${RED}错误: 此脚本必须以 root 用户身份运行。请使用 'sudo'。${NC}" >&2
        exit 1
     fi
 
-    # =====================================================================
-    #  Primary Fork: Is systemd-resolved active?
-    # =====================================================================
     if command -v resolvectl &> /dev/null && resolvectl status &> /dev/null; then
         # --- PIPELINE A: systemd-resolved is ACTIVE ---
-        echo -e "--> ${GREEN}[管线A] 检测到 systemd-resolved 正在运行。正在检查其持久化配置...${NC}"
+        echo -e "--> ${GREEN}发现：本系统已使用 systemd-resolved 进行DNS管理。正在检查其配置...${NC}"
         
         local current_dns
         current_dns=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Servers:/) {sub("DNS Servers: ", ""); print}}' | tr -s ' ')
         
-        # Check all security parameters for idempotency
         local config_file="/etc/systemd/resolved.conf"
         local is_perfect=true
         [[ "${current_dns}" == "${TARGET_DNS}" ]] || is_perfect=false
@@ -144,10 +135,31 @@ main() {
             purify_and_harden_dns
         fi
     else
-        # --- PIPELINE B: systemd-resolved is NOT ACTIVE ---
-        echo -e "--> ${YELLOW}[管线B] systemd-resolved 未激活或未安装。将检查并请求用户授权...${NC}"
+        # --- PIPELINE B: systemd-resolved is NOT ACTIVE (Improved User Communication) ---
+        echo -e "--> ${YELLOW}发现：本系统未使用 systemd-resolved 进行DNS管理。${NC}"
+        echo -e "--> ${YELLOW}因此，脚本将回退到传统模式：检查 /etc/resolv.conf 文件并向您报告其内容。${NC}"
         
-        read -p "您是否要安装并配置 systemd-resolved 以应用最终的安全DNS方案？(y/N): " -r user_choice
+        if [[ ! -f /etc/resolv.conf ]]; then
+            echo -e "${YELLOW}报告: /etc/resolv.conf 文件不存在。${NC}"
+        else
+            local current_nameservers
+            current_nameservers=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//')
+            
+            local impurities
+            impurities=$(grep -E '^(search|domain|options)' /etc/resolv.conf || true)
+
+            echo -e "${GREEN}--- 报告 ---${NC}"
+            echo "当前DNS服务器 (nameservers): ${YELLOW}${current_nameservers:-未设置}${NC}"
+            if [[ -n "$impurities" ]]; then
+                echo -e "检测到杂项配置 (search/domain/options):\n${YELLOW}${impurities}${NC}"
+            else
+                echo -e "检测到杂项配置: ${YELLOW}无${NC}"
+            fi
+            echo -e "${GREEN}------------${NC}"
+        fi
+
+        echo # Add a blank line
+        read -p "您是否要继续，安装并配置 systemd-resolved 以应用最终的安全DNS方案？(y/N): " -r user_choice
         user_choice=${user_choice,,} 
 
         if [[ "$user_choice" == "y" || "$user_choice" == "yes" ]]; then
