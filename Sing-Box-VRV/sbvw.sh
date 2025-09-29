@@ -2,7 +2,7 @@
 
 #===============================================================================
 # wget -N --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Sing-Box-VRV/sbvw.sh" && chmod +x sbvw.sh && ./sbvw.sh
-# Thanks: sing-box project (https://github.com/SagerNet/sing-box), fscarmen/warp-sh project (https://github.com/fscarmen/warp-sh)
+# Thanks: sing-box project[](https://github.com/SagerNet/sing-box), fscarmen/warp-sh project[](https://github.com/fscarmen/warp-sh)
 #===============================================================================
 
 SCRIPT_VERSION="2.2.1"
@@ -355,6 +355,13 @@ show_summary() {
     echo -e "${GREEN}VLESS 导入链接:${NC}"
     echo "$vless_link"
     show_client_config_format "$info_file_path"
+    if [[ "$info_file_path" == "$INFO_PATH_VRVW" ]]; then
+        echo "--------------------------------------------------"
+        echo -e "${GREEN}服务端Outbounds:${NC} WireProxy Socks5, Port: 40043"
+    else
+        echo "--------------------------------------------------"
+        echo -e "${GREEN}服务端Outbounds:${NC} direct"
+    fi
     if [[ "$CO_EXIST_MODE" == "true" ]]; then
         echo "--------------------------------------------------"
         echo "您当前处于共存模式，sing-box 监听在内部端口 ${INTERNAL_PORT}，请确保您的反向代理或 Web 服务已正确配置。"
