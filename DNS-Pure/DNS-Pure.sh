@@ -3,9 +3,10 @@
 # Name:         DNS-Pure.sh
 # Description:  An intelligent, idempotent, and resilient script that enforces
 #               the optimal secure DNS configuration on Debian systems.
-#               Version 2.8 fixes a critical bug in the idempotency check.
+#               Version 2.7 fixes a critical bug in the idempotency check
+#               by verifying the live status instead of the config file.
 # Author:       rTnrWE
-# Version:      2.8
+# Version:      2.7
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -112,7 +113,6 @@ purify_and_harden_dns() {
     echo "----------------------------------------------------"
     resolvectl status
     echo "----------------------------------------------------"
-
     echo -e "\n${GREEN}--- 如何手动验证 ---${NC}"
     echo "您可以随时使用以下命令来检查系统的DNS状态："
     echo ""
@@ -141,24 +141,40 @@ main() {
 
     echo "--> 正在检查系统DNS配置是否符合最终安全目标..."
     
+    # BUG FIX v2.7: The idempotency check now ONLY relies on the live status from resolvectl,
+    # which is the single source of truth for the system's actual DNS behavior.
+    
     local is_perfect=true
+    # Check 1: Is systemd-resolved active and responsive?
     if ! command -v resolvectl &> /dev/null || ! resolvectl status &> /dev/null; then
         is_perfect=false
     else
-        local current_dns
-        # BUG FIX v2.8: Use a robust sed command to parse DNS servers, immune to whitespace variations.
-        current_dns=$(resolvectl status | sed -n '/Global/,/^\s*$/{/DNS Servers:/s/.*DNS Servers:[[:space:]]*//p}')
+        # If active, check its live operational status
+        local status_output
+        status_output=$(resolvectl status)
         
-        local config_file="/etc/systemd/resolved.conf"
-
-        [[ "${current_dns}" == "${TARGET_DNS}" ]] || is_perfect=false
-        if [[ -f "$config_file" ]]; then
-            (grep -qE '^\s*LLMNR\s*=\s*no' "$config_file") || is_perfect=false
-            (grep -qE '^\s*MulticastDNS\s*=\s*no' "$config_file") || is_perfect=false
-            (grep -qE '^\s*DNSSEC\s*=\s*allow-downgrade' "$config_file") || is_perfect=false
-            (grep -qE '^\s*DNSOverTLS\s*=\s*yes' "$config_file") || is_perfect=false
-        else
+        # Check 2: Are the Global DNS Servers correct?
+        # Use a robust sed command to parse DNS servers, immune to whitespace variations.
+        local current_dns
+        current_dns=$(echo "${status_output}" | sed -n '/Global/,/^\s*$/{/DNS Servers:/s/.*DNS Servers:[[:space:]]*//p}')
+        
+        if [[ "${current_dns}" != "${TARGET_DNS}" ]]; then
             is_perfect=false
+        fi
+
+        # Check 3: Are the security protocols (LLMNR, mDNS, DoT) correctly set in the Global section?
+        local global_protocols
+        global_protocols=$(echo "${status_output}" | sed -n '/Global/,/^\s*$/p' | grep "Protocols:")
+
+        if ! echo "${global_protocols}" | grep -q -- "-LLMNR" || \
+           ! echo "${global_protocols}" | grep -q -- "-mDNS" || \
+           ! echo "${global_protocols}" | grep -q -- "+DNSOverTLS"; then
+            is_perfect=false
+        fi
+
+        # Check 4: Is DNSSEC set correctly in the Global section?
+        if ! echo "${status_output}" | grep -q "DNSSEC=allow-downgrade"; then
+             is_perfect=false
         fi
     fi
 
