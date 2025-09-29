@@ -3,10 +3,9 @@
 # Name:         DNS-Pure.sh
 # Description:  An intelligent, idempotent, and resilient script that enforces
 #               the optimal secure DNS configuration on Debian systems.
-#               It is compatible with both Debian 11 & 12 and provides
-#               post-run verification commands.
+#               Version 2.8 fixes a critical bug in the idempotency check.
 # Author:       rTnrWE
-# Version:      2.7
+# Version:      2.8
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -47,7 +46,6 @@ purge_legacy_dns_settings() {
 purify_and_harden_dns() {
     echo -e "\n--- 开始执行DNS净化与安全加固流程 ---"
 
-    # Get Debian version
     local debian_version
     if [[ -f /etc/os-release ]]; then
         debian_version=$(grep "VERSION_ID" /etc/os-release | cut -d'=' -f2 | tr -d '"')
@@ -55,7 +53,6 @@ purify_and_harden_dns() {
         debian_version=$(cat /etc/debian_version | cut -d'.' -f1)
     fi
 
-    # --- VERSION-SPECIFIC ACTIONS for Debian 11 ---
     if [[ "$debian_version" == "11" ]]; then
         echo "--> 检测到 Debian 11。将执行额外的兼容性修复..."
         if dpkg -s resolvconf &> /dev/null; then
@@ -111,7 +108,6 @@ purify_and_harden_dns() {
     sleep 1
     echo -e "${GREEN}--> ✅ DNS 安全配置已应用并重启服务。${NC}"
 
-    # --- FINAL VERIFICATION & USER INSTRUCTIONS ---
     echo -e "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}"
     echo "----------------------------------------------------"
     resolvectl status
@@ -135,6 +131,7 @@ purify_and_harden_dns() {
     echo -e "${YELLOW}注意：如果本次执行了净化或安装操作，建议重启 (reboot) VPS 以确保所有网络更改完全生效。${NC}"
 }
 
+
 # --- Main Logic ---
 main() {
     if [[ $EUID -ne 0 ]]; then
@@ -149,7 +146,8 @@ main() {
         is_perfect=false
     else
         local current_dns
-        current_dns=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Servers:/) {sub("DNS Servers: ", ""); print}}' | tr -s ' ')
+        # BUG FIX v2.8: Use a robust sed command to parse DNS servers, immune to whitespace variations.
+        current_dns=$(resolvectl status | sed -n '/Global/,/^\s*$/{/DNS Servers:/s/.*DNS Servers:[[:space:]]*//p}')
         
         local config_file="/etc/systemd/resolved.conf"
 
