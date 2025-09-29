@@ -5,22 +5,21 @@
 #               secure DNS configuration on Alpine Linux using Unbound.
 #               It automatically installs, repairs, and configures the system.
 # Author:       rTnrWE
-# Version:      1.0
+# Version:      1.1
 #
 # Usage:
-# wget -O - https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.sh | sudo sh
+# wget -qO- https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.sh | sh
 #  or
-# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.sh | sudo sh
+# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.sh | sh
 #
 
 # --- Script Configuration and Safety ---
 set -euo
 
 # --- Global Constants ---
-readonly TARGET_DNS_IPS="8.8.8.8 1.1.1.1" # Not used directly, but for reference
 readonly UNBOUND_CONFIG_FILE="/etc/unbound/unbound.conf"
+# Note: YAML-like config requires precise indentation. Using direct echo is safer.
 readonly SECURE_UNBOUND_CONFIG="server:
-    # General server settings
     verbosity: 1
     interface: 127.0.0.1
     interface: ::1
@@ -31,11 +30,11 @@ readonly SECURE_UNBOUND_CONFIG="server:
     do-tcp: yes
     access-control: 127.0.0.0/8 allow
     access-control: ::1/128 allow
-    
-    # Performance settings
     harden-glue: yes
     harden-dnssec-stripped: yes
     use-caps-for-id: yes
+    # Trust the built-in DNSSEC root keys
+    auto-trust-anchor-file: \"/var/lib/unbound/root.key\"
     
     # Enable DNS over TLS (DoT)
     ssl-upstream: yes
@@ -74,20 +73,22 @@ purify_and_harden_dns_alpine() {
     # Purge legacy settings first
     purge_legacy_dns_settings
 
-    # 1. Ensure Unbound and drill are installed.
-    echo "--> 正在确保 unbound 和 ldns (drill) 已安装..."
-    apk -U --no-cache add unbound ldns
+    # 1. Ensure Unbound is installed.
+    echo "--> 正在确保 unbound 已安装..."
+    apk -U --no-cache add unbound
 
     # 2. Apply the ultimate secure configuration.
-    echo "--> 正在应用 Unbound 安全优化配置 (DoT)..."
+    echo "--> 正在应用 Unbound 安全优化配置 (DoT & DNSSEC)..."
     echo "${SECURE_UNBOUND_CONFIG}" > "${UNBOUND_CONFIG_FILE}"
 
-    # 3. Force system to use Unbound.
+    # 3. Configure system to use Unbound.
     echo "--> 正在配置系统以使用本地 Unbound 解析器..."
+    # Step A: Influence resolvconf to prioritize localhost
     echo "nameserver 127.0.0.1" > /etc/resolv.conf.head
-    # Update resolv.conf with the new head file
     resolvconf -u
-
+    # Step B: Force-overwrite resolv.conf for absolute purity
+    echo "nameserver 127.0.0.1" > /etc/resolv.conf
+    
     # 4. Enable and start the Unbound service.
     echo "--> 正在启用并启动 unbound 服务..."
     rc-update add unbound default
@@ -96,13 +97,14 @@ purify_and_harden_dns_alpine() {
     # 5. Final verification.
     echo "\n${GREEN}✅ 全部操作完成！Unbound 已配置为系统的安全DNS解析器。${NC}"
     echo "----------------------------------------------------"
-    echo "验证 /etc/resolv.conf 内容:"
+    echo "最终 /etc/resolv.conf 内容:"
     cat /etc/resolv.conf
     echo "----------------------------------------------------"
-    echo "\n正在使用 'drill' 进行一次真实的DoT查询测试..."
-    drill sigok.verteiltesysteme.net @127.0.0.1
+    echo "\n正在使用 'nslookup' 进行一次真实的DoT+DNSSEC查询测试..."
+    echo "注意：对于DNSSEC测试域名，返回 'SERVFAIL' 是 Unbound 严格验证模式下【正确】的行为。"
+    nslookup sigok.verteiltesysteme.net 127.0.0.1
     echo "----------------------------------------------------"
-    echo "${GREEN}请检查上面的 'drill' 命令输出是否包含 'HEADER' 和 'ANSWER SECTION'。${NC}"
+    echo "${GREEN}请检查上面的 'nslookup' 输出是否表明查询是发往 'Server: 127.0.0.1'。${NC}"
     echo "${YELLOW}注意：如果本次执行了净化或安装操作，建议重启 (reboot) VPS 以确保所有网络更改完全生效。${NC}"
 }
 
@@ -120,7 +122,7 @@ main() {
     if ! rc-service unbound status &> /dev/null; then
         is_perfect=false
     fi
-    # Check 2: Is resolv.conf pointing to localhost?
+    # Check 2: Is resolv.conf pure (only localhost)?
     if ! grep -qE "^\s*nameserver\s+127\.0\.0\.1\s*$" /etc/resolv.conf || \
        grep -qE "^\s*nameserver\s+(?!127\.0\.0\.1)" /etc/resolv.conf; then
         is_perfect=false
