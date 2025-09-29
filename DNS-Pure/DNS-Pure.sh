@@ -3,9 +3,10 @@
 # Name:         DNS-Pure.sh
 # Description:  An intelligent, idempotent, and resilient script that enforces
 #               the optimal secure DNS configuration on Debian systems.
-#               It is compatible with both Debian 11 & 12 by using version-aware logic.
+#               It is compatible with both Debian 11 & 12 and provides
+#               post-run verification commands.
 # Author:       rTnrWE
-# Version:      2.6
+# Version:      2.7
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -57,20 +58,16 @@ purify_and_harden_dns() {
     # --- VERSION-SPECIFIC ACTIONS for Debian 11 ---
     if [[ "$debian_version" == "11" ]]; then
         echo "--> 检测到 Debian 11。将执行额外的兼容性修复..."
-        # On Debian 11, resolvconf conflicts with systemd-resolved. We must remove it.
         if dpkg -s resolvconf &> /dev/null; then
             echo "--> 正在卸载冲突的 'resolvconf' 软件包..."
             apt-get remove -y resolvconf > /dev/null
             echo -e "${GREEN}--> ✅ 'resolvconf' 已成功卸载。${NC}"
         fi
-        # Force-remove the old resolv.conf to prevent startup issues
         rm -f /etc/resolv.conf
     fi
 
-    # Purge legacy settings from /etc/network/interfaces
     purge_legacy_dns_settings
 
-    # 1. Ensure systemd-resolved is installed.
     if ! command -v resolvectl &> /dev/null; then
         echo "--> 正在安装 systemd-resolved..."
         if ! apt-get update -y > /dev/null; then
@@ -86,14 +83,11 @@ purify_and_harden_dns() {
         apt-get install -y systemd-resolved > /dev/null
     fi
 
-    # 2. Enable and start the service (ensure it's enabled before starting).
     echo "--> 正在启用并启动 systemd-resolved 服务..."
     systemctl enable systemd-resolved
     systemctl start systemd-resolved
 
-    # 3. Resiliency Check: Ensure the service is responsive.
     echo "--> 正在确保 systemd-resolved 服务响应正常..."
-    # Give it a moment to stabilize after start
     sleep 1
     if ! resolvectl status &> /dev/null; then
         echo -e "${YELLOW}--> 服务未响应。正在尝试强制重新初始化...${NC}"
@@ -110,23 +104,36 @@ purify_and_harden_dns() {
          echo -e "${GREEN}--> ✅ 服务响应正常。${NC}"
     fi
 
-    # 4. Apply the ultimate secure configuration.
     echo "--> 正在应用安全优化配置 (DoT, DNSSEC, No-LLMNR)..."
     echo -e "${SECURE_RESOLVED_CONFIG}" > /etc/systemd/resolved.conf
-    # The symlink MUST be correct.
     ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
     systemctl restart systemd-resolved
     sleep 1
     echo -e "${GREEN}--> ✅ DNS 安全配置已应用并重启服务。${NC}"
 
-    # 5. Final verification.
+    # --- FINAL VERIFICATION & USER INSTRUCTIONS ---
     echo -e "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}"
     echo "----------------------------------------------------"
     resolvectl status
     echo "----------------------------------------------------"
+
+    echo -e "\n${GREEN}--- 如何手动验证 ---${NC}"
+    echo "您可以随时使用以下命令来检查系统的DNS状态："
+    echo ""
+    echo -e "${YELLOW}1. 查看 systemd-resolved 的详细状态:${NC}"
+    echo "   resolvectl status"
+    echo ""
+    echo -e "${YELLOW}2. 检查 systemd-resolved 服务的运行情况:${NC}"
+    echo "   systemctl status systemd-resolved"
+    echo ""
+    echo -e "${YELLOW}3. 查看最终的安全配置文件内容:${NC}"
+    echo "   cat /etc/systemd/resolved.conf"
+    echo ""
+    echo -e "${YELLOW}4. 确认 /etc/resolv.conf 已被正确接管 (应指向 .../stub-resolv.conf):${NC}"
+    echo "   ls -l /etc/resolv.conf"
+    echo "----------------------------------------------------"
     echo -e "${YELLOW}注意：如果本次执行了净化或安装操作，建议重启 (reboot) VPS 以确保所有网络更改完全生效。${NC}"
 }
-
 
 # --- Main Logic ---
 main() {
@@ -138,11 +145,9 @@ main() {
     echo "--> 正在检查系统DNS配置是否符合最终安全目标..."
     
     local is_perfect=true
-    # Check 1: Is systemd-resolved active and responsive?
     if ! command -v resolvectl &> /dev/null || ! resolvectl status &> /dev/null; then
         is_perfect=false
     else
-        # If active, check its configuration
         local current_dns
         current_dns=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Servers:/) {sub("DNS Servers: ", ""); print}}' | tr -s ' ')
         
