@@ -153,7 +153,13 @@ main() {
         # invisible characters like carriage returns (\r) and trim whitespace.
         
         local current_dns
-        current_dns=$(echo "${status_output}" | sed -n '/Global/,/^\s*$/{/DNS Servers:/s/.*DNS Servers:[[:space:]]*//p}' | tr -d '\r' | xargs)
+        current_dns=$(echo "${status_output}" | awk '
+        /^Global/ { in_global=1 }
+        in_global && /DNS Servers:/ { gsub(/^.*DNS Servers: /, ""); print; collecting=1; next }
+        in_global && collecting && /^[ \t]+[#0-9a-fA-F:.]+/ { gsub(/^[ \t]+/, ""); print; next }
+        in_global && collecting && /^[^ \t]/ { collecting=0 }
+        in_global && /^[^ \t]/ && ! /Global/ { in_global=0 }
+        ' | paste -sd ' ' | tr -d '\r' | xargs)
         
         if [[ "${current_dns}" != "${TARGET_DNS}" ]]; then
             is_perfect=false
