@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
 # Name:         DNS-Pure.sh
-# Description:  An intelligent script that purifies and hardens the system's DNS
-#               by optimally configuring systemd-resolved. It prioritizes
-#               DNS over TLS (DoT) and other security best practices for servers.
+# Description:  An intelligent and resilient script that purifies, hardens,
+#               and persistently configures the system's DNS using systemd-resolved.
+#               It actively cleans up legacy network configurations and enforces
+#               security best practices like DNS over TLS (DoT) and DNSSEC.
 # Author:       rTnrWE
-# Version:      2.2
+# Version:      2.3
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -29,9 +30,30 @@ readonly RED="\033[0;31m"
 readonly NC="\033[0m" # No Color
 
 # --- Helper Functions ---
-# This function contains the full installation and hardening logic.
+
+# Purges legacy DNS settings from /etc/network/interfaces
+purge_legacy_dns_settings() {
+    local interfaces_file="/etc/network/interfaces"
+    if [[ -f "$interfaces_file" ]]; then
+        # Check if there's anything to do before proceeding
+        if grep -qE '^[[:space:]]*dns-(nameservers|search|domain)' "$interfaces_file"; then
+            echo "--> 正在净化 /etc/network/interfaces 中的厂商残留DNS配置..."
+            # Use sed to comment out any line starting with dns- followed by nameservers, search, or domain
+            # This is idempotent; it won't re-comment already commented lines.
+            sed -i -E 's/^[[:space:]]*(dns-(nameservers|search|domain).*)/# \1/' "$interfaces_file"
+            echo -e "${GREEN}--> ✅ 旧有DNS配置已成功注释禁用。${NC}"
+        else
+            echo "--> /etc/network/interfaces 中未发现需要净化的DNS配置。"
+        fi
+    fi
+}
+
+# The main function to install, repair, and configure systemd-resolved
 purify_and_harden_dns() {
     echo -e "\n--- 开始执行DNS净化与安全加固流程 ---"
+
+    # NEW STEP: Purge legacy settings first
+    purge_legacy_dns_settings
 
     # 1. Ensure systemd-resolved is installed.
     if ! command -v resolvectl &> /dev/null; then
@@ -71,9 +93,7 @@ purify_and_harden_dns() {
 
     # 3. Apply the ultimate secure configuration.
     echo "--> 正在应用安全优化配置 (DoT, DNSSEC, No-LLMNR)..."
-    # Use echo with a variable to write the multi-line configuration
     echo -e "${SECURE_RESOLVED_CONFIG}" > /etc/systemd/resolved.conf
-    # Ensure the symlink is correct
     ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
     systemctl restart systemd-resolved
     sleep 1
@@ -85,6 +105,7 @@ purify_and_harden_dns() {
     resolvectl status
     echo "----------------------------------------------------"
     echo -e "${GREEN}请检查上面的 'DNS Servers' 是否为 '${TARGET_DNS}' 并确认 'DNSSEC' 和 'DNSOverTLS' 的状态。${NC}"
+    echo -e "${YELLOW}注意：如果本次执行了净化操作，建议重启 (reboot) VPS 以确保所有网络更改完全生效。${NC}"
 }
 
 
@@ -107,20 +128,15 @@ main() {
         current_dns=$(resolvectl status | awk '/^Global$/,/^$/ {if (/DNS Servers:/) {sub("DNS Servers: ", ""); print}}' | tr -s ' ')
         
         # Check all security parameters for idempotency
-        local current_llmnr
-        current_llmnr=$(grep -E '^\s*LLMNR=' /etc/systemd/resolved.conf | tail -n1 | cut -d= -f2 || echo "default")
-        local current_mdns
-        current_mdns=$(grep -E '^\s*MulticastDNS=' /etc/systemd/resolved.conf | tail -n1 | cut -d= -f2 || echo "default")
-        local current_dnssec
-        current_dnssec=$(grep -E '^\s*DNSSEC=' /etc/systemd/resolved.conf | tail -n1 | cut -d= -f2 || echo "default")
-        local current_dot
-        current_dot=$(grep -E '^\s*DNSOverTLS=' /etc/systemd/resolved.conf | tail -n1 | cut -d= -f2 || echo "default")
+        local config_file="/etc/systemd/resolved.conf"
+        local is_perfect=true
+        [[ "${current_dns}" == "${TARGET_DNS}" ]] || is_perfect=false
+        (grep -qE '^\s*LLMNR\s*=\s*no' "$config_file" 2>/dev/null) || is_perfect=false
+        (grep -qE '^\s*MulticastDNS\s*=\s*no' "$config_file" 2>/dev/null) || is_perfect=false
+        (grep -qE '^\s*DNSSEC\s*=\s*allow-downgrade' "$config_file" 2>/dev/null) || is_perfect=false
+        (grep -qE '^\s*DNSOverTLS\s*=\s*yes' "$config_file" 2>/dev/null) || is_perfect=false
 
-        if [[ "${current_dns}" == "${TARGET_DNS}" ]] && \
-           [[ "${current_llmnr,,}" == "no" ]] && \
-           [[ "${current_mdns,,}" == "no" ]] && \
-           [[ "${current_dnssec,,}" == "allow-downgrade" ]] && \
-           [[ "${current_dot,,}" == "yes" ]]; then
+        if [[ "$is_perfect" == true ]]; then
             echo -e "\n${GREEN}✅ 状态完美！系统已应用最终的安全DNS配置。无需操作。${NC}"
             exit 0
         else
@@ -129,28 +145,8 @@ main() {
         fi
     else
         # --- PIPELINE B: systemd-resolved is NOT ACTIVE ---
-        echo -e "--> ${YELLOW}[管线B] systemd-resolved 未激活或未安装。正在检查 /etc/resolv.conf...${NC}"
+        echo -e "--> ${YELLOW}[管线B] systemd-resolved 未激活或未安装。将检查并请求用户授权...${NC}"
         
-        if [[ ! -f /etc/resolv.conf ]]; then
-            echo -e "${YELLOW}报告: /etc/resolv.conf 文件不存在。${NC}"
-        else
-            local current_nameservers
-            current_nameservers=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//')
-            
-            local impurities
-            impurities=$(grep -E '^(search|domain|options)' /etc/resolv.conf || true)
-
-            echo -e "${GREEN}--- 报告 ---${NC}"
-            echo "当前DNS服务器 (nameservers): ${YELLOW}${current_nameservers:-未设置}${NC}"
-            if [[ -n "$impurities" ]]; then
-                echo -e "检测到杂项配置 (search/domain/options):\n${YELLOW}${impurities}${NC}"
-            else
-                echo -e "检测到杂项配置: ${YELLOW}无${NC}"
-            fi
-            echo -e "${GREEN}------------${NC}"
-        fi
-
-        echo # Add a blank line for readability
         read -p "您是否要安装并配置 systemd-resolved 以应用最终的安全DNS方案？(y/N): " -r user_choice
         user_choice=${user_choice,,} 
 
