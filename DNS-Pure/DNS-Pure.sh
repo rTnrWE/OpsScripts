@@ -4,7 +4,7 @@
 # Description: Idempotent script to persistently set a clean DNS on Debian/Ubuntu.
 # Author: rTnrWE (Enhanced by Gemini)
 # Version: 1.3 - Enhanced feedback on initial check.
-#
+# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
 # This script will:
 # 1. First, check if the system's DNS is already the desired pure state.
 # 2. If it is, exit immediately with a success message.
