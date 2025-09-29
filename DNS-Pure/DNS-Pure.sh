@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 #
 # Name:         DNS-Pure.sh
-# Description:  An assertive and idempotent script that enforces the optimal
-#               secure DNS configuration on Debian/Ubuntu systems using
-#               systemd-resolved. It automatically installs, repairs, and
-#               configures the system to the desired state.
+# Description:  An intelligent, idempotent, and resilient script that enforces
+#               the optimal secure DNS configuration on Debian systems.
+#               It is compatible with both Debian 11 & 12 by using version-aware logic.
 # Author:       rTnrWE
-# Version:      2.5
+# Version:      2.6
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -47,7 +46,28 @@ purge_legacy_dns_settings() {
 purify_and_harden_dns() {
     echo -e "\n--- 开始执行DNS净化与安全加固流程 ---"
 
-    # Purge legacy settings first
+    # Get Debian version
+    local debian_version
+    if [[ -f /etc/os-release ]]; then
+        debian_version=$(grep "VERSION_ID" /etc/os-release | cut -d'=' -f2 | tr -d '"')
+    else
+        debian_version=$(cat /etc/debian_version | cut -d'.' -f1)
+    fi
+
+    # --- VERSION-SPECIFIC ACTIONS for Debian 11 ---
+    if [[ "$debian_version" == "11" ]]; then
+        echo "--> 检测到 Debian 11。将执行额外的兼容性修复..."
+        # On Debian 11, resolvconf conflicts with systemd-resolved. We must remove it.
+        if dpkg -s resolvconf &> /dev/null; then
+            echo "--> 正在卸载冲突的 'resolvconf' 软件包..."
+            apt-get remove -y resolvconf > /dev/null
+            echo -e "${GREEN}--> ✅ 'resolvconf' 已成功卸载。${NC}"
+        fi
+        # Force-remove the old resolv.conf to prevent startup issues
+        rm -f /etc/resolv.conf
+    fi
+
+    # Purge legacy settings from /etc/network/interfaces
     purge_legacy_dns_settings
 
     # 1. Ensure systemd-resolved is installed.
@@ -64,17 +84,21 @@ purify_and_harden_dns() {
             apt-get update -y > /dev/null
         fi
         apt-get install -y systemd-resolved > /dev/null
-        systemctl enable --now systemd-resolved
-        echo -e "${GREEN}--> ✅ systemd-resolved 安装并启动成功。${NC}"
     fi
 
-    # 2. Resiliency Check: Ensure the service is responsive.
+    # 2. Enable and start the service (ensure it's enabled before starting).
+    echo "--> 正在启用并启动 systemd-resolved 服务..."
+    systemctl enable systemd-resolved
+    systemctl start systemd-resolved
+
+    # 3. Resiliency Check: Ensure the service is responsive.
     echo "--> 正在确保 systemd-resolved 服务响应正常..."
+    # Give it a moment to stabilize after start
+    sleep 1
     if ! resolvectl status &> /dev/null; then
         echo -e "${YELLOW}--> 服务未响应。正在尝试强制重新初始化...${NC}"
-        systemctl stop systemd-resolved &> /dev/null || true
         ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-        systemctl start systemd-resolved
+        systemctl restart systemd-resolved
         sleep 2
         
         if ! resolvectl status &> /dev/null; then
@@ -86,15 +110,16 @@ purify_and_harden_dns() {
          echo -e "${GREEN}--> ✅ 服务响应正常。${NC}"
     fi
 
-    # 3. Apply the ultimate secure configuration.
+    # 4. Apply the ultimate secure configuration.
     echo "--> 正在应用安全优化配置 (DoT, DNSSEC, No-LLMNR)..."
     echo -e "${SECURE_RESOLVED_CONFIG}" > /etc/systemd/resolved.conf
+    # The symlink MUST be correct.
     ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
     systemctl restart systemd-resolved
     sleep 1
     echo -e "${GREEN}--> ✅ DNS 安全配置已应用并重启服务。${NC}"
 
-    # 4. Final verification.
+    # 5. Final verification.
     echo -e "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}"
     echo "----------------------------------------------------"
     resolvectl status
@@ -124,14 +149,12 @@ main() {
         local config_file="/etc/systemd/resolved.conf"
 
         [[ "${current_dns}" == "${TARGET_DNS}" ]] || is_perfect=false
-        # Check config file only if it exists
         if [[ -f "$config_file" ]]; then
             (grep -qE '^\s*LLMNR\s*=\s*no' "$config_file") || is_perfect=false
             (grep -qE '^\s*MulticastDNS\s*=\s*no' "$config_file") || is_perfect=false
             (grep -qE '^\s*DNSSEC\s*=\s*allow-downgrade' "$config_file") || is_perfect=false
             (grep -qE '^\s*DNSOverTLS\s*=\s*yes' "$config_file") || is_perfect=false
         else
-            # If config file doesn't exist, it's definitely not perfect
             is_perfect=false
         fi
     fi
