@@ -2,11 +2,11 @@
 #
 # Name:         DNS-Pure.sh
 # Description:  The ultimate, stable, and resilient script that enforces the
-#               optimal secure DNS configuration on Debian systems by safely
-#               integrating systemd-resolved with the existing networking service.
-#               It focuses on neutralizing conflicts rather than replacing services.
+#               optimal secure DNS configuration on Debian systems. It performs
+#               a comprehensive health check on all known conflict points
+#               before deciding if action is needed, ensuring true stability.
 # Author:       rTnrWE
-# Version:      2.5
+# Version:      2.5 (The Guardian)
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -48,20 +48,17 @@ purify_and_harden_dns() {
     # 1a. Tame the DHCP client
     local dhclient_conf="/etc/dhcp/dhclient.conf"
     if [[ -f "$dhclient_conf" ]]; then
-        log "正在驯服 DHCP 客户端 (dhclient)..."
-        if ! grep -q "ignore domain-name-servers;" "$dhclient_conf"; then
+        if ! grep -q "ignore domain-name-servers;" "$dhclient_conf" || ! grep -q "ignore domain-search;" "$dhclient_conf"; then
+            log "正在驯服 DHCP 客户端 (dhclient)..."
             echo "ignore domain-name-servers;" >> "$dhclient_conf"
-            log "${GREEN}✅ 已添加 'ignore domain-name-servers' 到 ${dhclient_conf}${NC}"
-        fi
-        if ! grep -q "ignore domain-search;" "$dhclient_conf"; then
             echo "ignore domain-search;" >> "$dhclient_conf"
-            log "${GREEN}✅ 已添加 'ignore domain-search' 到 ${dhclient_conf}${NC}"
+            log "${GREEN}✅ 已确保 'ignore' 指令存在于 ${dhclient_conf}${NC}"
         fi
     fi
 
     # 1b. Disable the problematic if-up.d script
     local ifup_script="/etc/network/if-up.d/resolved"
-    if [[ -x "$ifup_script" ]]; then
+    if [[ -f "$ifup_script" ]] && [[ -x "$ifup_script" ]]; then
         log "正在禁用有冲突的 if-up.d 兼容性脚本..."
         chmod -x "$ifup_script"
         log "${GREEN}✅ 已移除 ${ifup_script} 的可执行权限。${NC}"
@@ -69,12 +66,10 @@ purify_and_harden_dns() {
 
     # 1c. Purge legacy DNS settings from /etc/network/interfaces
     local interfaces_file="/etc/network/interfaces"
-    if [[ -f "$interfaces_file" ]]; then
-        if grep -qE '^[[:space:]]*dns-(nameservers|search|domain)' "$interfaces_file"; then
-            log "正在净化 /etc/network/interfaces 中的厂商残留DNS配置..."
-            sed -i -E 's/^[[:space:]]*(dns-(nameservers|search|domain).*)/# \1/' "$interfaces_file"
-            log "${GREEN}✅ 旧有DNS配置已成功注释禁用。${NC}"
-        fi
+    if [[ -f "$interfaces_file" ]] && grep -qE '^[[:space:]]*dns-(nameservers|search|domain)' "$interfaces_file"; then
+        log "正在净化 /etc/network/interfaces 中的厂商残留DNS配置..."
+        sed -i -E 's/^[[:space:]]*(dns-(nameservers|search|domain).*)/# \1/' "$interfaces_file"
+        log "${GREEN}✅ 旧有DNS配置已成功注释禁用。${NC}"
     fi
     
     # --- STAGE 2: INSTALL AND CONFIGURE SYSTEMD-RESOLVED ---
@@ -82,9 +77,15 @@ purify_and_harden_dns() {
 
     if ! command -v resolvectl &> /dev/null; then
         log "正在安装 systemd-resolved..."
-        # Minimal apt-get update without full upgrade
         apt-get update -y > /dev/null
         apt-get install -y systemd-resolved > /dev/null
+    fi
+    
+    if [[ "$debian_version" == "11" ]] && dpkg -s resolvconf &> /dev/null; then
+        log "检测到 Debian 11 上的 'resolvconf'，正在卸载..."
+        apt-get remove -y resolvconf > /dev/null
+        rm -f /etc/resolv.conf
+        log "${GREEN}✅ 'resolvconf' 已成功卸载。${NC}"
     fi
 
     log "正在启用并启动 systemd-resolved 服务..."
@@ -99,21 +100,21 @@ purify_and_harden_dns() {
 
     # --- STAGE 3: SAFELY RESTART NETWORKING ---
     log "阶段三：正在安全地重启网络服务以应用所有更改..."
-    # With all conflicts removed, this restart should now be safe.
-    systemctl restart networking.service
+    if systemctl is-enabled --quiet networking.service; then
+        systemctl restart networking.service
+        log "${GREEN}✅ networking.service 已安全重启。${NC}"
+    fi
     
     # --- STAGE 4: FINAL VERIFICATION ---
     echo -e "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}"
     echo "----------------------------------------------------"
     resolvectl status
     echo "----------------------------------------------------"
-    
     echo -e "\n${GREEN}--- 如何手动验证 ---${NC}"
     echo "您可以随时使用以下命令来检查系统的DNS状态："
     echo -e "${YELLOW}1. 查看 systemd-resolved 的详细状态:${NC} resolvectl status"
     echo -e "${YELLOW}2. 检查 networking.service 是否正常运行:${NC} systemctl status networking.service"
     echo "----------------------------------------------------"
-    echo -e "${YELLOW}注意：为确保万无一失，建议您在方便时执行一次 'reboot'。${NC}"
 }
 
 
@@ -124,41 +125,61 @@ main() {
        exit 1
     fi
 
-    echo "--> 正在检查系统DNS配置是否符合最终安全目标..."
+    echo "--- 开始执行全面系统DNS健康检查 ---"
     
     local is_perfect=true
+
+    # Check 1: systemd-resolved live status
+    echo -n "1. 检查 systemd-resolved 实时状态... "
     if ! command -v resolvectl &> /dev/null || ! resolvectl status &> /dev/null; then
+        echo -e "${YELLOW}未运行或无响应。${NC}"
         is_perfect=false
     else
         local status_output
         status_output=$(resolvectl status)
-        
         local current_dns
         current_dns=$(echo "${status_output}" | sed -n '/Global/,/^\s*$/{/DNS Servers:/s/.*DNS Servers:[[:space:]]*//p}' | tr -d '\r\n' | xargs)
         
-        if [[ "${current_dns}" != "${TARGET_DNS}" ]]; then
+        if [[ "${current_dns}" != "${TARGET_DNS}" ]] || \
+           ! echo "${status_output}" | grep -q -- "-LLMNR" || \
+           ! echo "${status_output}" | grep -q -- "-mDNS" || \
+           ! echo "${status_output}" | grep -q -- "+DNSOverTLS" || \
+           ! echo "${status_output}" | grep -q "DNSSEC=allow-downgrade"; then
+            echo -e "${YELLOW}配置不符。${NC}"
             is_perfect=false
-        fi
-
-        local global_protocols
-        global_protocols=$(echo "${status_output}" | sed -n '/Global/,/^\s*$/p' | grep "Protocols:" | tr -d '\r\n' | xargs)
-
-        if ! echo "${global_protocols}" | grep -q -- "-LLMNR" || \
-           ! echo "${global_protocols}" | grep -q -- "-mDNS" || \
-           ! echo "${global_protocols}" | grep -q -- "+DNSOverTLS"; then
-            is_perfect=false
-        fi
-
-        if ! echo "${status_output}" | grep -q "DNSSEC=allow-downgrade"; then
-             is_perfect=false
+        else
+            echo -e "${GREEN}配置正确。${NC}"
         fi
     fi
 
+    # Check 2: dhclient.conf for ignore directives
+    echo -n "2. 检查 dhclient.conf 配置... "
+    local dhclient_conf="/etc/dhcp/dhclient.conf"
+    if [[ -f "$dhclient_conf" ]] && \
+       grep -q "ignore domain-name-servers;" "$dhclient_conf" && \
+       grep -q "ignore domain-search;" "$dhclient_conf"; then
+        echo -e "${GREEN}已净化。${NC}"
+    else
+        echo -e "${YELLOW}未净化或文件不存在。${NC}"
+        is_perfect=false
+    fi
+
+    # Check 3: Conflicting if-up.d script
+    echo -n "3. 检查 if-up.d 冲突脚本... "
+    local ifup_script="/etc/network/if-up.d/resolved"
+    if [[ ! -f "$ifup_script" ]] || [[ ! -x "$ifup_script" ]]; then
+        echo -e "${GREEN}已禁用或不存在。${NC}"
+    else
+        echo -e "${YELLOW}脚本存在且可执行。${NC}"
+        is_perfect=false
+    fi
+
+    # Final Decision
     if [[ "$is_perfect" == true ]]; then
-        echo -e "\n${GREEN}✅ 状态完美！系统已应用最终的安全DNS配置。无需任何操作。${NC}"
+        echo -e "\n${GREEN}✅ 全面检查通过！系统DNS配置稳定且安全。无需任何操作。${NC}"
         exit 0
     else
-        log_warn "当前配置不符合最终安全目标。将自动执行净化与加固..."
+        echo -e "\n${YELLOW}--> 一项或多项检查未通过。为了确保系统的长期稳定，将执行完整的净化与加固流程...${NC}"
         purify_and_harden_dns
     fi
 }
