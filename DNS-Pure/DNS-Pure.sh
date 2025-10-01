@@ -4,9 +4,9 @@
 # Description:  The ultimate, stable, and resilient script that enforces the
 #               optimal secure DNS configuration on Debian systems. It performs
 #               a comprehensive health check on all known conflict points
-#               before deciding if action is needed, ensuring true stability.
+#               and provides clear, unambiguous feedback.
 # Author:       rTnrWE
-# Version:      2.5 (The Guardian)
+# Version:      2.6 (The Guardian - Refined Communication)
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -50,6 +50,8 @@ purify_and_harden_dns() {
     if [[ -f "$dhclient_conf" ]]; then
         if ! grep -q "ignore domain-name-servers;" "$dhclient_conf" || ! grep -q "ignore domain-search;" "$dhclient_conf"; then
             log "正在驯服 DHCP 客户端 (dhclient)..."
+            # Add a newline just in case the file doesn't end with one
+            echo "" >> "$dhclient_conf"
             echo "ignore domain-name-servers;" >> "$dhclient_conf"
             echo "ignore domain-search;" >> "$dhclient_conf"
             log "${GREEN}✅ 已确保 'ignore' 指令存在于 ${dhclient_conf}${NC}"
@@ -132,7 +134,7 @@ main() {
     # Check 1: systemd-resolved live status
     echo -n "1. 检查 systemd-resolved 实时状态... "
     if ! command -v resolvectl &> /dev/null || ! resolvectl status &> /dev/null; then
-        echo -e "${YELLOW}未运行或无响应。${NC}"
+        echo -e "${YELLOW}服务未运行或无响应。${NC}"
         is_perfect=false
     else
         local status_output
@@ -145,7 +147,7 @@ main() {
            ! echo "${status_output}" | grep -q -- "-mDNS" || \
            ! echo "${status_output}" | grep -q -- "+DNSOverTLS" || \
            ! echo "${status_output}" | grep -q "DNSSEC=allow-downgrade"; then
-            echo -e "${YELLOW}配置不符。${NC}"
+            echo -e "${YELLOW}实时配置与安全目标不符。${NC}"
             is_perfect=false
         else
             echo -e "${GREEN}配置正确。${NC}"
@@ -155,14 +157,19 @@ main() {
     # Check 2: dhclient.conf for ignore directives
     echo -n "2. 检查 dhclient.conf 配置... "
     local dhclient_conf="/etc/dhcp/dhclient.conf"
-    if [[ -f "$dhclient_conf" ]] && \
-       grep -q "ignore domain-name-servers;" "$dhclient_conf" && \
-       grep -q "ignore domain-search;" "$dhclient_conf"; then
-        echo -e "${GREEN}已净化。${NC}"
+    if [[ -f "$dhclient_conf" ]]; then
+        if grep -q "ignore domain-name-servers;" "$dhclient_conf" && \
+           grep -q "ignore domain-search;" "$dhclient_conf"; then
+            echo -e "${GREEN}已净化。${NC}"
+        else
+            echo -e "${YELLOW}未发现 'ignore' 净化参数。${NC}"
+            is_perfect=false
+        fi
     else
-        echo -e "${YELLOW}未净化或文件不存在。${NC}"
-        is_perfect=false
+        # If the file doesn't exist, it can't cause problems. Consider it "ok".
+        echo -e "${GREEN}文件不存在，无需净化。${NC}"
     fi
+
 
     # Check 3: Conflicting if-up.d script
     echo -n "3. 检查 if-up.d 冲突脚本... "
