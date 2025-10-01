@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
 # Name:         DNS-Pure.sh
-# Description:  The ultimate, idempotent, and resilient script that safely
-#               upgrades the network management on Debian systems to the modern
-#               systemd-networkd stack. It features a zero-risk, auto-rollback
-#               mechanism and numerous hardening features to ensure stability.
+# Description:  The ultimate, stable, and resilient script that enforces the
+#               optimal secure DNS configuration on Debian systems by safely
+#               integrating systemd-resolved with the existing networking service.
+#               It focuses on neutralizing conflicts rather than replacing services.
 # Author:       rTnrWE
-# Version:      3.1 (The Final Chapter)
+# Version:      2.5
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -15,7 +15,7 @@
 # --- Script Configuration and Safety ---
 set -euo pipefail
 
-# --- Global Constants ---
+# --- Global Constants: The Ultimate Secure DNS Configuration ---
 readonly TARGET_DNS="8.8.8.8#dns.google 1.1.1.1#cloudflare-dns.com"
 readonly SECURE_RESOLVED_CONFIG="[Resolve]
 DNS=${TARGET_DNS}
@@ -35,178 +35,133 @@ log() { echo -e "${GREEN}--> $1${NC}"; }
 log_warn() { echo -e "${YELLOW}--> $1${NC}"; }
 log_error() { echo -e "${RED}--> $1${NC}" >&2; }
 
-run_upgrade_and_hardening() {
-    echo -e "\n--- 开始执行网络架构升级与DNS加固流程 ---"
+# The main function to install, repair, and configure systemd-resolved
+purify_and_harden_dns() {
+    echo -e "\n--- 开始执行DNS净化与安全加固流程 ---"
 
-    # --- STAGE 1: PREPARATION & BACKUP ---
-    log "阶段一：准备与备份..."
-    
-    local interface_name
-    interface_name=$(ip -o -4 route show to default | awk '{print $5}')
-    if [[ -z "$interface_name" ]]; then
-        log_error "错误：无法自动检测到主网络接口。脚本中止。"
-        exit 1
-    fi
-    log "自动检测到主网络接口为: ${YELLOW}${interface_name}${NC}"
+    local debian_version
+    debian_version=$(grep "VERSION_ID" /etc/os-release | cut -d'=' -f2 | tr -d '"' || echo "unknown")
 
-    local ipv4_address
-    ipv4_address=$(ip -o -4 addr show dev "$interface_name" | awk '{print $4}')
-    if [[ -z "$ipv4_address" ]]; then
-        log_error "错误：无法自动检测到IPv4地址。脚本中止。"
-        exit 1
-    fi
-    log "自动检测到IPv4地址为: ${YELLOW}${ipv4_address}${NC}"
+    # --- STAGE 1: NEUTRALIZE CONFLICTS (The Core of Stability) ---
+    log "阶段一：正在清除所有潜在的DNS冲突源..."
 
-    local ipv4_gateway
-    ipv4_gateway=$(ip -o -4 route show to default | awk '{print $3}')
-    if [[ -z "$ipv4_gateway" ]]; then
-        log_error "错误：无法自动检测到IPv4网关。脚本中止。"
-        exit 1
-    fi
-    log "自动检测到IPv4网关为: ${YELLOW}${ipv4_gateway}${NC}"
-
-    log "正在备份 /etc/network/interfaces..."
-    cp -a /etc/network/interfaces "/etc/network/interfaces.dns-pure.bak.$(date +%F-%T)"
-
-    local networkd_config_file="/etc/systemd/network/10-dns-pure.network"
-    log "正在生成 systemd-networkd 配置文件..."
-    
-    local networkd_config="[Match]
-Name=${interface_name}
-
-[Network]
-Address=${ipv4_address}
-Gateway=${ipv4_gateway}
-"
-    local ipv6_address
-    ipv6_address=$(ip -o -6 addr show dev "$interface_name" scope global | awk '{print $4}')
-    local ipv6_gateway
-    ipv6_gateway=$(ip -o -6 route show to default | awk '{print $3}')
-    if [[ -n "$ipv6_address" ]] && [[ -n "$ipv6_gateway" ]]; then
-        log "自动检测到IPv6配置，将一并迁移。"
-        networkd_config+="Address=${ipv6_address}\nGateway=${ipv6_gateway}\n"
-    fi
-
-    # --- STAGE 2 & 3: CRITICAL SWITCH & HEALTH CHECK ---
-    log "阶段二：尝试切换到 systemd-networkd..."
-    
-    systemctl stop networking.service
-
-    echo -e "${networkd_config}" > "${networkd_config_file}"
-    chmod 644 "${networkd_config_file}"
-    systemctl start systemd-networkd
-    
-    sleep 5
-
-    log "阶段三：执行在线健康检查..."
-    local health_check_passed=true
-
-    if ! networkctl status "$interface_name" | grep -q "State: configured"; then
-        log_error "健康检查失败：接口 ${interface_name} 未能被 systemd-networkd 正确配置。"
-        health_check_passed=false
-    fi
-    if ! ping -c 1 -W 3 "$ipv4_gateway" &> /dev/null; then
-        log_error "健康检查失败：无法 Ping 通网关 ${ipv4_gateway}。"
-        health_check_passed=false
-    fi
-    if ! ping -c 1 -W 3 "8.8.8.8" &> /dev/null; then
-        log_error "健康检查失败：无法 Ping 通外部IP 8.8.8.8。"
-        health_check_passed=false
-    fi
-
-    # --- STAGE 4: COMMIT OR ROLLBACK ---
-    if [[ "$health_check_passed" == true ]]; then
-        # --- SUCCESS PATH (COMMIT) ---
-        log_warn "健康检查通过！网络已由 systemd-networkd 成功接管。现在将永久化配置。"
-        
-        systemctl disable networking.service
-        systemctl mask networking.service
-        systemctl enable systemd-networkd
-        log "${GREEN}✅ 旧的 networking.service 已被永久禁用，systemd-networkd 已设为开机自启。${NC}"
-
-        log "正在安装/配置 systemd-resolved..."
-        systemctl enable systemd-resolved
-        systemctl start systemd-resolved
-        
-        log "正在应用最终的DNS安全配置 (DoT, DNSSEC...)"
-        echo -e "${SECURE_RESOLVED_CONFIG}" > /etc/systemd/resolved.conf
-        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-        systemctl restart systemd-resolved
-        
-        echo -e "\n${GREEN}✅✅✅ 网络架构升级成功！✅✅✅${NC}"
-        echo "----------------------------------------------------"
-        resolvectl status
-        echo "----------------------------------------------------"
-        echo -e "${YELLOW}强烈建议您现在执行 'reboot' 来以全新的网络堆栈启动系统。${NC}"
-
-    else
-        # --- FAILURE PATH (ROLLBACK) ---
-        log_error "!!! 切换失败，正在执行自动回滚 !!!"
-        
-        systemctl stop systemd-networkd &> /dev/null || true
-        systemctl disable systemd-networkd &> /dev/null || true
-        rm -f "${networkd_config_file}"
-        
-        # ULTIMATE HARDENING: Flush the interface to prevent "Address already assigned" error.
-        log_warn "正在清理接口 ${interface_name} 上的残留IP配置..."
-        ip addr flush dev "${interface_name}"
-        
-        log "正在尝试恢复旧的 networking.service..."
-        systemctl start networking.service
-        
-        sleep 3
-        if ping -c 1 "8.8.8.8" &> /dev/null; then
-             echo -e "${GREEN}✅ 自动回滚成功！系统已恢复到之前的 networking.service 状态，网络连接已恢复。${NC}"
-             echo -e "${GREEN}您的系统未做任何永久性更改。脚本已安全退出。${NC}"
-        else
-             log_error "!!! 紧急警告：自动回滚后网络连接仍未恢复。请通过VNC或控制台登录并执行 'reboot'。!!!"
-             log_error "如果重启无效，请执行以下紧急救援命令替换<>内的内容:"
-             log_error "ip addr add ${ipv4_address} dev ${interface_name}; ip route add default via ${ipv4_gateway}; echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
+    # 1a. Tame the DHCP client
+    local dhclient_conf="/etc/dhcp/dhclient.conf"
+    if [[ -f "$dhclient_conf" ]]; then
+        log "正在驯服 DHCP 客户端 (dhclient)..."
+        if ! grep -q "ignore domain-name-servers;" "$dhclient_conf"; then
+            echo "ignore domain-name-servers;" >> "$dhclient_conf"
+            log "${GREEN}✅ 已添加 'ignore domain-name-servers' 到 ${dhclient_conf}${NC}"
         fi
-        exit 1
+        if ! grep -q "ignore domain-search;" "$dhclient_conf"; then
+            echo "ignore domain-search;" >> "$dhclient_conf"
+            log "${GREEN}✅ 已添加 'ignore domain-search' 到 ${dhclient_conf}${NC}"
+        fi
     fi
+
+    # 1b. Disable the problematic if-up.d script
+    local ifup_script="/etc/network/if-up.d/resolved"
+    if [[ -x "$ifup_script" ]]; then
+        log "正在禁用有冲突的 if-up.d 兼容性脚本..."
+        chmod -x "$ifup_script"
+        log "${GREEN}✅ 已移除 ${ifup_script} 的可执行权限。${NC}"
+    fi
+
+    # 1c. Purge legacy DNS settings from /etc/network/interfaces
+    local interfaces_file="/etc/network/interfaces"
+    if [[ -f "$interfaces_file" ]]; then
+        if grep -qE '^[[:space:]]*dns-(nameservers|search|domain)' "$interfaces_file"; then
+            log "正在净化 /etc/network/interfaces 中的厂商残留DNS配置..."
+            sed -i -E 's/^[[:space:]]*(dns-(nameservers|search|domain).*)/# \1/' "$interfaces_file"
+            log "${GREEN}✅ 旧有DNS配置已成功注释禁用。${NC}"
+        fi
+    fi
+    
+    # --- STAGE 2: INSTALL AND CONFIGURE SYSTEMD-RESOLVED ---
+    log "阶段二：正在配置 systemd-resolved..."
+
+    if ! command -v resolvectl &> /dev/null; then
+        log "正在安装 systemd-resolved..."
+        # Minimal apt-get update without full upgrade
+        apt-get update -y > /dev/null
+        apt-get install -y systemd-resolved > /dev/null
+    fi
+
+    log "正在启用并启动 systemd-resolved 服务..."
+    systemctl enable systemd-resolved
+    systemctl start systemd-resolved
+    
+    log "正在应用最终的DNS安全配置 (DoT, DNSSEC...)"
+    echo -e "${SECURE_RESOLVED_CONFIG}" > /etc/systemd/resolved.conf
+    ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+    systemctl restart systemd-resolved
+    sleep 1
+
+    # --- STAGE 3: SAFELY RESTART NETWORKING ---
+    log "阶段三：正在安全地重启网络服务以应用所有更改..."
+    # With all conflicts removed, this restart should now be safe.
+    systemctl restart networking.service
+    
+    # --- STAGE 4: FINAL VERIFICATION ---
+    echo -e "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}"
+    echo "----------------------------------------------------"
+    resolvectl status
+    echo "----------------------------------------------------"
+    
+    echo -e "\n${GREEN}--- 如何手动验证 ---${NC}"
+    echo "您可以随时使用以下命令来检查系统的DNS状态："
+    echo -e "${YELLOW}1. 查看 systemd-resolved 的详细状态:${NC} resolvectl status"
+    echo -e "${YELLOW}2. 检查 networking.service 是否正常运行:${NC} systemctl status networking.service"
+    echo "----------------------------------------------------"
+    echo -e "${YELLOW}注意：为确保万无一失，建议您在方便时执行一次 'reboot'。${NC}"
 }
 
+
+# --- Main Logic ---
 main() {
     if [[ $EUID -ne 0 ]]; then
        log_error "错误: 此脚本必须以 root 用户身份运行。请使用 'sudo'。"
        exit 1
     fi
 
-    echo "--> 正在检查系统网络管理状态..."
+    echo "--> 正在检查系统DNS配置是否符合最终安全目标..."
     
-    if systemctl is-active --quiet systemd-networkd && ! systemctl is-enabled --quiet networking.service; then
-        log "${GREEN}系统已由 systemd-networkd 管理。现在检查DNS配置...${NC}"
+    local is_perfect=true
+    if ! command -v resolvectl &> /dev/null || ! resolvectl status &> /dev/null; then
+        is_perfect=false
+    else
+        local status_output
+        status_output=$(resolvectl status)
         
-        local is_dns_perfect=true
-        if ! command -v resolvectl &> /dev/null || ! resolvectl status &> /dev/null; then
-            is_dns_perfect=false
-        else
-            local status_output
-            status_output=$(resolvectl status)
-            local current_dns
-            current_dns=$(echo "${status_output}" | sed -n '/Global/,/^\s*$/{/DNS Servers:/s/.*DNS Servers:[[:space:]]*//p}' | tr -d '\r' | xargs)
-            if [[ "${current_dns}" != "${TARGET_DNS}" ]]; then
-                is_dns_perfect=false
-            fi
+        local current_dns
+        current_dns=$(echo "${status_output}" | sed -n '/Global/,/^\s*$/{/DNS Servers:/s/.*DNS Servers:[[:space:]]*//p}' | tr -d '\r\n' | xargs)
+        
+        if [[ "${current_dns}" != "${TARGET_DNS}" ]]; then
+            is_perfect=false
         fi
 
-        if [[ "$is_dns_perfect" == true ]]; then
-            echo -e "\n${GREEN}✅ 状态完美！网络和DNS配置均符合最终目标。无需任何操作。${NC}"
-            exit 0
-        else
-            log_warn "网络管理已是 systemd-networkd，但DNS配置不符。将仅执行DNS加固..."
-            systemctl enable systemd-resolved
-            systemctl start systemd-resolved
-            echo -e "${SECURE_RESOLVED_CONFIG}" > /etc/systemd/resolved.conf
-            ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-            systemctl restart systemd-resolved
-            echo -e "\n${GREEN}✅ DNS配置已加固完成。${NC}"
+        local global_protocols
+        global_protocols=$(echo "${status_output}" | sed -n '/Global/,/^\s*$/p' | grep "Protocols:" | tr -d '\r\n' | xargs)
+
+        if ! echo "${global_protocols}" | grep -q -- "-LLMNR" || \
+           ! echo "${global_protocols}" | grep -q -- "-mDNS" || \
+           ! echo "${global_protocols}" | grep -q -- "+DNSOverTLS"; then
+            is_perfect=false
         fi
+
+        if ! echo "${status_output}" | grep -q "DNSSEC=allow-downgrade"; then
+             is_perfect=false
+        fi
+    fi
+
+    if [[ "$is_perfect" == true ]]; then
+        echo -e "\n${GREEN}✅ 状态完美！系统已应用最终的安全DNS配置。无需任何操作。${NC}"
+        exit 0
     else
-        log_warn "系统当前可能由 networking.service 管理。脚本将执行完整的、带回滚功能的网络架构升级。"
-        run_upgrade_and_hardening
+        log_warn "当前配置不符合最终安全目标。将自动执行净化与加固..."
+        purify_and_harden_dns
     fi
 }
 
+# --- Script Entrypoint ---
 main "$@"
