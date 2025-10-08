@@ -1,24 +1,24 @@
 #!/bin/bash
 
 #====================================================================================
-# vwaw.sh - VLESS+WS+ArgoTunnel+WireProxy Smart Modular Deployer (v2.3 - Enhanced)
+# vwaw.sh - VLESS+WS+ArgoTunnel+WireProxy Smart Modular Deployer (v2.4 - Automated Tunnel Naming)
 #
 #   Description: An intelligent, stateful, and fault-tolerant deployment and
 #                management tool for the VWAW proxy solution. This version
-#                includes dynamic Cloudflare Tunnel naming and improved error handling.
+#                features automated Cloudflare Tunnel naming based on the domain.
 #   Usage:
 #   wget --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh" -O vwaw.sh && chmod +x vwaw.sh && ./vwaw.sh
 #
 #====================================================================================
 
 # --- Script Configuration ---
-readonly SCRIPT_VERSION="2.3"
+readonly SCRIPT_VERSION="2.4"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh"
 readonly XRAY_CONFIG_PATH="/usr/local/etc/xray/config.json"
 readonly CLOUDFLARED_CONFIG_DIR="/etc/cloudflared"
 readonly CLOUDFLARED_CONFIG_PATH="${CLOUDFLARED_CONFIG_DIR}/config.yml"
 readonly WARP_SCRIPT_PATH="/etc/wireguard/menu.sh"
-# TUNNEL_NAME is now dynamically determined in manage_cloudflared and loaded from config
+# TUNNEL_NAME is now dynamically determined and loaded from config
 
 # --- Colors for Output ---
 readonly RED='\033[0;31m'
@@ -212,25 +212,13 @@ manage_cloudflared() {
     read -rp "请输入您准备用于隧道的域名 (例如 tunnel.yourdomain.com): " DOMAIN
     if [ -z "${DOMAIN}" ]; then echo -e "${RED}域名不能为空! 操作已取消。${NC}"; return 1; fi
     
-    # --- Intelligent Tunnel Naming ---
-    local generated_tunnel_name
+    # --- Automated Intelligent Tunnel Naming ---
     # Replace dots with hyphens, remove leading/trailing hyphens, append -tunnel
+    local generated_tunnel_name
     generated_tunnel_name=$(echo "${DOMAIN}" | sed 's/\./-/g' | sed 's/^-//' | sed 's/-$//')
-    generated_tunnel_name="${generated_tunnel_name}-tunnel"
-
-    local user_chosen_tunnel_name="${generated_tunnel_name}"
-    read -rp "建议的隧道名称是: ${GREEN}${user_chosen_tunnel_name}${NC}。是否接受？[Y/n]: " accept_name
-    if [[ ! "${accept_name}" =~ ^[yY]$ && -n "${accept_name}" ]]; then # If not 'y' or 'Y' and not empty
-        read -rp "请输入自定义隧道名称: " custom_name
-        if [ -n "${custom_name}" ]; then
-            user_chosen_tunnel_name="${custom_name}"
-        else
-            echo -e "${YELLOW}未输入自定义名称，将使用建议名称：${user_chosen_tunnel_name}${NC}"
-        fi
-    fi
-    TUNNEL_NAME="${user_chosen_tunnel_name}" # Assign to global variable
-    echo -e "${BLUE}将使用隧道名称: ${TUNNEL_NAME}${NC}"
-    # --- End Intelligent Tunnel Naming ---
+    TUNNEL_NAME="${generated_tunnel_name}-tunnel" # Assign to global variable directly
+    echo -e "${BLUE}将根据域名智能生成隧道名称: ${TUNNEL_NAME}${NC}"
+    # --- End Automated Intelligent Tunnel Naming ---
 
     echo -e "\n----------------------------------------------------------------"
     echo -e " ${YELLOW}重要提示：请确保您的Cloudflare DNS后台，【没有】任何已存在的、${NC}"
@@ -262,7 +250,7 @@ manage_cloudflared() {
     local create_output_file; create_output_file=$(mktemp)
     cloudflared tunnel create "${TUNNEL_NAME}" > "${create_output_file}" 2>&1
     
-    # Debugging output kept for robustness
+    # Debugging output for robustness (can be removed in final version if desired)
     echo -e "${YELLOW}--- cloudflared tunnel create command output ---${NC}"
     cat "${create_output_file}"
     echo -e "${YELLOW}--- End of output ---${NC}"
@@ -271,7 +259,7 @@ manage_cloudflared() {
     if grep -qi "Error" "${create_output_file}" || ! grep -qP '[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}' "${create_output_file}"; then
         echo -e "${RED}创建 Tunnel 失败! ${NC}";
         echo -e "${YELLOW}错误信息: $(cat "${create_output_file}")${NC}";
-        echo -e "${YELLOW}最常见的原因是同名隧道 '${TUNNEL_NAME}' 已存在。请在Cloudflare Zero Trust仪表盘中检查并删除旧隧道后重试。您也可以选择一个自定义的隧道名称。${NC}";
+        echo -e "${YELLOW}最常见的原因是同名隧道 '${TUNNEL_NAME}' 已存在。请在Cloudflare Zero Trust仪表盘中检查并删除旧隧道后重试。${NC}";
         rm -f "${create_output_file}"; return 1;
     fi
     
@@ -452,8 +440,9 @@ uninstall_vwaw() {
         load_tunnel_name_from_config
         tunnel_to_delete="${TUNNEL_NAME}"
     fi
-    # As a last resort, if still empty, use the old default for uninstall attempt
+    # As a last resort, if still empty, use a common default for uninstall attempt
     if [ -z "$tunnel_to_delete" ]; then
+        echo -e "${YELLOW}警告: 无法从配置中获取 Cloudflare Tunnel 名称。将尝试删除旧的默认隧道名 'vwaw-tunnel'。${NC}"
         tunnel_to_delete="vwaw-tunnel"
     fi
 
