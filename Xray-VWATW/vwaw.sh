@@ -1,18 +1,18 @@
 #!/bin/bash
 
 #====================================================================================
-# vwaw.sh - VLESS+WS+ArgoTunnel+WireProxy Smart Modular Deployer (v2.5 - WireProxy Directory Fix)
+# vwaw.sh - VLESS+WS+ArgoTunnel+WireProxy Smart Modular Deployer (v2.6 - lsof Dependency Fix)
 #
 #   Description: An intelligent, stateful, and fault-tolerant deployment and
 #                management tool for the VWAW proxy solution. This version
-#                includes fixes for WireProxy script download and improved error handling.
+#                ensures lsof is installed for accurate WireProxy status checks.
 #   Usage:
 #   wget --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh" -O vwaw.sh && chmod +x vwaw.sh && ./vwaw.sh
 #
 #====================================================================================
 
 # --- Script Configuration ---
-readonly SCRIPT_VERSION="2.5"
+readonly SCRIPT_VERSION="2.6"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh"
 readonly XRAY_CONFIG_PATH="/usr/local/etc/xray/config.json"
 readonly CLOUDFLARED_CONFIG_DIR="/etc/cloudflared"
@@ -90,10 +90,28 @@ check_all_states() {
     fi
     if systemctl is-active --quiet cloudflared; then STATE_CLOUDFLARED_SERVICE_RUNNING=true; fi
 
+    # Check for WireProxy, and ensure lsof is installed for status check
     if [ -f "/etc/wireguard/proxy.conf" ]; then
         STATE_WIREPROXY_INSTALLED=true
         local port; port=$(awk '/^\[Socks5\]/{f=1} f && /BindAddress/{split($3, a, ":"); print a[2]; exit}' "/etc/wireguard/proxy.conf" 2>/dev/null)
-        if [[ -n "$port" ]] && lsof -i:"$port" >/dev/null 2>&1; then STATE_WIREPROXY_SERVICE_RUNNING=true; fi
+        
+        # Ensure lsof is installed before attempting to use it for status check
+        if ! command -v lsof &> /dev/null; then
+            echo -e "${YELLOW}警告: 依赖工具 'lsof' 未安装，正在尝试安装...${NC}"
+            apt-get update && apt-get install -y lsof
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}错误: 'lsof' 安装失败。WireProxy 服务状态可能无法准确检测。${NC}"
+            else
+                echo -e "${GREEN}'lsof' 安装成功。${NC}"
+            fi
+        fi
+
+        # Only attempt to check service running state if lsof is available
+        if command -v lsof &> /dev/null; then
+            if [[ -n "$port" ]] && lsof -i:"$port" >/dev/null 2>&1; then STATE_WIREPROXY_SERVICE_RUNNING=true; fi
+        else
+            echo -e "${YELLOW}警告: 'lsof' 不可用，无法准确检测 WireProxy 服务运行状态。${NC}"
+        fi
     fi
 }
 
@@ -396,8 +414,15 @@ display_config_info() {
         
         echo "Checking WARP IPs... (this may take a moment)"
         local ipv4; local ipv6;
-        ipv4=$(curl -s -4 --max-time 8 --proxy "socks5h://127.0.0.1:${port}" https://ipv4.icanhazip.com || echo "N/A")
-        ipv6=$(curl -s -6 --max-time 8 --proxy "socks5h://127.0.0.1:${port}" https://ipv6.icanhazip.com || echo "N/A")
+        # Check if lsof is available before trying to proxy curl
+        if command -v lsof &> /dev/null; then
+            ipv4=$(curl -s -4 --max-time 8 --proxy "socks5h://127.0.0.1:${port}" https://ipv4.icanhazip.com || echo "N/A")
+            ipv6=$(curl -s -6 --max-time 8 --proxy "socks5h://127.0.0.1:${port}" https://ipv6.icanhazip.com || echo "N/A")
+        else
+            echo -e "${YELLOW}警告: 'lsof' 不可用，无法通过 WireProxy 检查外部 IP。${NC}"
+            ipv4="N/A (lsof missing)"
+            ipv6="N/A (lsof missing)"
+        fi
         echo "IPv4: ${ipv4}"
         echo "IPv6: ${ipv6}"
     else
@@ -521,6 +546,7 @@ main_menu() {
     echo " [ 服务运行状态 ]"
     echo -e "   - Xray Service:            $(if ${STATE_XRAY_SERVICE_RUNNING}; then echo -e "${GREEN}[✓ 运行中]${NC}"; else echo -e "${RED}[✗ 已停止]${NC}"; fi)"
     echo -e "   - Cloudflared Service:       $(if ${STATE_CLOUDFLARED_SERVICE_RUNNING}; then echo -e "${GREEN}[✓ 运行中]${NC}"; else echo -e "${RED}[✗ 已停止]${NC}"; fi)"
+    # Now this status check should be accurate due to lsof fix
     echo -e "   - WireProxy Service:       $(if ${STATE_WIREPROXY_SERVICE_RUNNING}; then echo -e "${GREEN}[✓ 运行中]${NC}"; else echo -e "${RED}[✗ 已停止]${NC}"; fi)"
     echo "------------------------------------------------------------"
     echo " [ 主菜单 ]"
