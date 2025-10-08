@@ -1,18 +1,18 @@
 #!/bin/bash
 
 #====================================================================================
-# vwaw.sh - VLESS+WS+ArgoTunnel+WireProxy Smart Modular Deployer (v2.4 - Automated Tunnel Naming)
+# vwaw.sh - VLESS+WS+ArgoTunnel+WireProxy Smart Modular Deployer (v2.5 - WireProxy Directory Fix)
 #
 #   Description: An intelligent, stateful, and fault-tolerant deployment and
 #                management tool for the VWAW proxy solution. This version
-#                features automated Cloudflare Tunnel naming based on the domain.
+#                includes fixes for WireProxy script download and improved error handling.
 #   Usage:
 #   wget --no-check-certificate "https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh" -O vwaw.sh && chmod +x vwaw.sh && ./vwaw.sh
 #
 #====================================================================================
 
 # --- Script Configuration ---
-readonly SCRIPT_VERSION="2.4"
+readonly SCRIPT_VERSION="2.5"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/Xray-VWATW/vwaw.sh"
 readonly XRAY_CONFIG_PATH="/usr/local/etc/xray/config.json"
 readonly CLOUDFLARED_CONFIG_DIR="/etc/cloudflared"
@@ -320,14 +320,33 @@ manage_wireproxy() {
     echo "----------------------------------------------------------------"
     
     if [ ! -f "${WARP_SCRIPT_PATH}" ]; then
-        wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O ${WARP_SCRIPT_PATH} && chmod +x ${WARP_SCRIPT_PATH}
+        echo ">>> 正在下载并安装 WireProxy (fscarmen) 脚本..."
+        # Ensure the directory exists before downloading
+        mkdir -p "$(dirname "${WARP_SCRIPT_PATH}")"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}错误: 无法创建目录 $(dirname "${WARP_SCRIPT_PATH}")。请检查权限。${NC}"; return 1;
+        fi
+
+        wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O ${WARP_SCRIPT_PATH}
         if [ $? -ne 0 ]; then
             echo -e "${RED}错误: WireProxy (fscarmen) 脚本下载失败。请检查URL或网络连接。${NC}"; return 1;
         fi
+        chmod +x ${WARP_SCRIPT_PATH}
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}错误: WireProxy (fscarmen) 脚本添加执行权限失败。${NC}"; return 1;
+        fi
+        echo -e "${GREEN}WireProxy (fscarmen) 脚本下载并设置权限成功。${NC}"
+    else
+        echo "WireProxy (fscarmen) 脚本已存在。"
     fi
     
     # Give control to the fscarmen script
+    echo -e "${BLUE}>>> 正在运行 WireProxy (fscarmen) 脚本...${NC}"
     ${WARP_SCRIPT_PATH}
+    # Check exit code of fscarmen's script itself, but only as a warning as it's interactive
+    if [ $? -ne 0 ]; then
+        echo -e "${YELLOW}警告: fscarmen 的 WireProxy 脚本可能未能成功执行。请检查其输出。${NC}"
+    fi
     
     echo "----------------------------------------------------------------"
     echo "fscarmen脚本已退出。"
