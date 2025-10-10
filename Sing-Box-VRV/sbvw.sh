@@ -307,6 +307,18 @@ change_reality_domain() {
             esac
         fi
     done
+
+    # Display updated configuration summary after successful change
+    local info_file_path
+    if [[ -f "$INFO_PATH_VRVW" ]]; then
+        info_file_path="$INFO_PATH_VRVW"
+    elif [[ -f "$INFO_PATH_VRV" ]]; then
+        info_file_path="$INFO_PATH_VRV"
+    fi
+    if [[ -n "$info_file_path" ]]; then
+        show_summary "$info_file_path"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+    fi
 }
 
 start_service() {
