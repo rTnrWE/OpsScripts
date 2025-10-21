@@ -3,9 +3,9 @@
 # Name:         DNS-Pure-Alpine.sh
 # Description:  The ultimate, stable, and resilient script that enforces the
 #               optimal secure DNS configuration on Alpine Linux using Unbound.
-#               Version 2.3 fixes the critical unbound data directory creation.
+#               Version 2.4 enhances user feedback during long operations.
 # Author:       rTnrWE
-# Version:      2.3 (The Final Alpine Chapter)
+# Version:      2.4 (The Final Alpine Chapter)
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.sh | sh
@@ -22,6 +22,7 @@ readonly SECURE_UNBOUND_CONFIG="server:
     interface: ::1
     port: 53
     do-ip4: yes
+    do-ip6: yes
     do-ip6: yes
     do-udp: yes
     do-tcp: yes
@@ -42,7 +43,7 @@ forward-zone:
     forward-addr: 2001:4860:4860::8888@853#dns.google
     forward-addr: 2606:4700:4700::1111@853#cloudflare-dns.com
 "
-readonly GREEN="\033[0;2m" # Dim green for less important logs
+readonly GREEN="\033[0;32m"
 readonly YELLOW="\033[1;33m"
 readonly RED="\033[0;31m"
 readonly NC="\033[0m"
@@ -66,19 +67,32 @@ purify_and_harden_dns_alpine() {
     fi
 
     if ! command -v unbound >/dev/null; then
-        log "正在安装 unbound..."
-        apk -U --no-cache add unbound
+        log "正在安装 unbound (这可能需要一点时间)..."
+        # Provide feedback for the installation process
+        if apk -U --no-cache add unbound >/dev/null; then
+            log "${GREEN}✅ unbound 安装成功。${NC}"
+        else
+            log_error "unbound 安装失败。请检查网络和apk配置。"
+            exit 1
+        fi
     fi
-
-    # CRITICAL FIX v2.3: Ensure the data directory for unbound exists.
+    
     log "正在创建 Unbound 数据目录..."
     mkdir -p "/var/lib/unbound/"
-    log "${GREEN}✅ 数据目录 /var/lib/unbound/ 已确保存在。${NC}"
 
-    # CRITICAL FIX v2.2: Initialize the DNSSEC root trust anchor.
+    # --- ENHANCED FEEDBACK FOR UNBOUND-ANCHOR ---
     log "正在初始化 DNSSEC 根信任锚 (root.key)..."
-    unbound-anchor -a "/var/lib/unbound/root.key"
-    log "${GREEN}✅ root.key 已成功生成。${NC}"
+    log_warn "这一步需要连接网络，可能会持续 10-60 秒，请耐心等待..."
+    
+    # Execute and capture output/errors
+    if unbound-anchor -a "/var/lib/unbound/root.key"; then
+        log "${GREEN}✅ root.key 已成功生成。${NC}"
+    else
+        log_error "!!! 'unbound-anchor' 命令执行失败。!!!"
+        log_error "这通常是由于网络问题或防火墙阻止了出站的 DNS/TLS 连接。"
+        log_error "请检查您的网络连接和防火墙规则，然后重试。"
+        exit 1
+    fi
 
     log "正在应用 Unbound 安全优化配置 (DoT & DNSSEC)..."
     echo "${SECURE_UNBOUND_CONFIG}" > "${UNBOUND_CONFIG_FILE}"
