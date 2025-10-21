@@ -4,11 +4,10 @@
 # Description:  The final, correct, and transparent script to enforce a pure
 #               DNS-over-TLS (DoT) configuration on Alpine Linux using Stubby.
 #               Version 3.5 provides a complete and unambiguous final report.
-# Author:       rTnrWE
-# Version:      3.5 (The Final Proof)
+# Version:      3.5
 #
 # Usage:
-# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.v3.5.sh | sh
+# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.sh | sh
 #
 
 # --- Script Configuration and Safety ---
