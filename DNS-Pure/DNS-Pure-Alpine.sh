@@ -1,14 +1,14 @@
 #!/usr/bin/env sh
 #
 # Name:         DNS-Pure-Alpine.sh
-# Description:  The final, correct, and direct script to enforce a pure
+# Description:  The final, correct, and transparent script to enforce a pure
 #               DNS-over-TLS (DoT) configuration on Alpine Linux using Stubby.
-#               Version 3.4 fixes the last regex bug and improves user feedback.
+#               Version 3.5 provides a complete and unambiguous final report.
 # Author:       rTnrWE
-# Version:      3.4 (The Final Truth)
+# Version:      3.5 (The Final Proof)
 #
 # Usage:
-# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure-Alpine.sh | sh
+# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.v3.5.sh | sh
 #
 
 # --- Script Configuration and Safety ---
@@ -61,29 +61,6 @@ log() { printf -- "${BOLD_GREEN}--> %s${NC}\n" "$1"; }
 log_warn() { printf -- "${YELLOW}--> %s${NC}\n" "$1"; }
 log_error() { printf -- "${RED}--> %s${NC}\n" "$1" >&2; }
 
-# NEW: Function to generate the final status report
-generate_status_report() {
-    printf -- "\n--- DNS 最终状态报告 ---\n"
-    
-    # Check if a live query works
-    if ! nslookup -timeout=5 google.com 127.0.0.1 >/dev/null 2>&1; then
-        log_error "!!! 验证失败：本地解析器 (Stubby @ 127.0.0.1) 未能成功解析域名。!!!"
-        printf -- "----------------------------------------------------\n"
-        return 1
-    fi
-    
-    printf -- "----------------------------------------------------\n"
-    printf "${GREEN}本地解析器 (Stubby @ 127.0.0.1): ${BOLD_GREEN}工作正常${NC}\n"
-    printf "${GREEN}resolv.conf 模式: ${BOLD_GREEN}stub (指向 127.0.0.1)${NC}\n\n"
-    printf "${BOLD_GREEN}上游 DoT 服务器池 (Upstream DoT Servers):${NC}\n"
-    printf -- "    8.8.8.8#dns.google\n"
-    printf -- "    1.1.1.1#cloudflare-dns.com\n"
-    printf -- "    (以及其他备用和IPv6地址)\n"
-    printf -- "----------------------------------------------------\n"
-    printf "${BOLD_GREEN}结论：系统所有DNS查询都将通过本地 Stubby, 加密后发送到上述服务器池之一。${NC}\n"
-}
-
-
 # The main function to install and configure Stubby
 purify_with_stubby() {
     printf "\n--- 开始执行DNS净化与安全加固流程 (Stubby) ---\n"
@@ -114,7 +91,7 @@ purify_with_stubby() {
     rc-update add stubby default
     rc-service stubby restart
     
-    # Wait a moment for stubby to establish upstream connections
+    # Wait a moment for stubby to initialize
     sleep 2
 }
 
@@ -143,7 +120,6 @@ main() {
         printf "${YELLOW}文件不存在。${NC}\n"
         is_perfect=false
     else
-        # Robust, POSIX-compliant check
         has_localhost=$(grep -c "nameserver 127.0.0.1" "$resolv_file" || true)
         nameserver_count=$(grep -c "nameserver" "$resolv_file" || true)
         if [ "$has_localhost" -ne 1 ] || [ "$nameserver_count" -ne 1 ]; then
@@ -156,13 +132,32 @@ main() {
     
     if [ "$is_perfect" = true ]; then
         printf "\n${GREEN}✅ 全面检查通过！系统DNS配置稳定且安全。${NC}\n"
-        generate_status_report
-        exit 0
     else
         printf "\n${YELLOW}--> 检查未通过。将执行完整的净化与加固流程...${NC}\n"
         purify_with_stubby
-        generate_status_report
     fi
+    
+    # --- FINAL PROOF OF CONFIGURATION ---
+    printf "\n--- DNS 最终配置状态验证 ---\n"
+    
+    if ! nslookup -timeout=5 google.com 127.0.0.1 >/dev/null 2>&1; then
+        log_error "!!! 验证失败：本地解析器 (Stubby @ 127.0.0.1) 未能成功解析域名。!!!"
+        log_error "请检查 stubby 服务日志: logread | grep stubby"
+        exit 1
+    fi
+    
+    printf -- "----------------------------------------------------\n"
+    printf "${BOLD_GREEN}1. /etc/resolv.conf (系统DNS入口) 内容:${NC}\n"
+    printf -- "----------------------------------------------------\n"
+    cat /etc/resolv.conf
+    printf -- "\n"
+
+    printf -- "----------------------------------------------------\n"
+    printf "${BOLD_GREEN}2. /etc/stubby/stubby.yml (Stubby上游DoT服务器) 内容:${NC}\n"
+    printf -- "----------------------------------------------------\n"
+    cat /etc/stubby/stubby.yml
+    printf -- "----------------------------------------------------\n"
+    printf "\n${BOLD_GREEN}结论：所有DNS查询都将通过 /etc/resolv.conf 指向本地Stubby，\n然后由Stubby加密后，发送到上述配置文件中指定的DoT服务器之一。${NC}\n"
 }
 
 main "$@"
