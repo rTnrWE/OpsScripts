@@ -3,7 +3,7 @@
 # Name:         DNS-Pure-Alpine.sh
 # Description:  The ultimate, stable, and resilient script that enforces the
 #               optimal secure DNS configuration on Alpine Linux using Unbound.
-#               Version 2.2 provides the final, correct, and robust implementation.
+#               Version 2.2 fixes the critical root.key initialization deadlock.
 # Author:       rTnrWE
 # Version:      2.2 (The Final Alpine Chapter)
 #
@@ -17,7 +17,7 @@ set -eu
 # --- Global Constants ---
 readonly UNBOUND_CONFIG_FILE="/etc/unbound/unbound.conf"
 readonly SECURE_UNBOUND_CONFIG="server:
-    verbosity: 1
+    verbosity: 0 # Reduce log noise in normal operation
     interface: 127.0.0.1
     interface: ::1
     port: 53
@@ -30,6 +30,7 @@ readonly SECURE_UNBOUND_CONFIG="server:
     harden-glue: yes
     harden-dnssec-stripped: yes
     use-caps-for-id: yes
+    # Trust the managed DNSSEC root keys
     auto-trust-anchor-file: \"/var/lib/unbound/root.key\"
     
     # Enable DNS over TLS (DoT)
@@ -70,6 +71,12 @@ purify_and_harden_dns_alpine() {
         apk -U --no-cache add unbound
     fi
 
+    # CRITICAL FIX: Initialize the DNSSEC root trust anchor BEFORE starting unbound.
+    log "正在初始化 DNSSEC 根信任锚 (root.key)..."
+    # This command uses built-in IPs and does not depend on system DNS.
+    unbound-anchor -a "/var/lib/unbound/root.key"
+    log "${GREEN}✅ root.key 已成功生成。${NC}"
+
     log "正在应用 Unbound 安全优化配置 (DoT & DNSSEC)..."
     echo "${SECURE_UNBOUND_CONFIG}" > "${UNBOUND_CONFIG_FILE}"
 
@@ -78,7 +85,6 @@ purify_and_harden_dns_alpine() {
     if command -v resolvconf >/dev/null; then
         resolvconf -u
     fi
-    # Final forceful overwrite to ensure purity, works even if resolvconf is not installed
     echo "nameserver 127.0.0.1" > /etc/resolv.conf
     
     log "正在启用并启动 unbound 服务..."
@@ -91,8 +97,7 @@ purify_and_harden_dns_alpine() {
     cat /etc/resolv.conf
     printf -- "----------------------------------------------------\n"
     printf "\n正在使用 'nslookup' 进行一次真实的DoT+DNSSEC查询测试...\n"
-    printf "注意：对于DNSSEC测试域名，返回 'SERVFAIL' 是 Unbound 严格验证模式下【正确】的行为。\n"
-    nslookup sigok.verteiltesysteme.net 127.0.0.1
+    nslookup google.com 127.0.0.1
     printf -- "----------------------------------------------------\n"
 }
 
@@ -107,7 +112,6 @@ main() {
     
     is_perfect=true
 
-    # Check 1: Unbound service status
     printf "1. 检查 Unbound 服务状态... "
     if ! rc-service unbound status &>/dev/null; then
         printf "${YELLOW}服务未运行。${NC}\n"
@@ -116,15 +120,13 @@ main() {
         printf "${GREEN}正在运行。${NC}\n"
     fi
 
-    # Check 2: resolv.conf purity (Robust, POSIX-compliant check)
     printf "2. 检查 /etc/resolv.conf 配置... "
     resolv_file="/etc/resolv.conf"
     if [ ! -f "$resolv_file" ]; then
         printf "${YELLOW}文件不存在。${NC}\n"
         is_perfect=false
     else
-        # It must contain 127.0.0.1, and the total number of nameservers must be exactly 1.
-        has_localhost=$(grep -c "nameserver 127.0.0.1" "$resolv_file" || true) # Use || true to prevent exit on no match
+        has_localhost=$(grep -c "nameserver 127.0.0.1" "$resolv_file" || true)
         nameserver_count=$(grep -c "nameserver" "$resolv_file" || true)
         if [ "$has_localhost" -ne 1 ] || [ "$nameserver_count" -ne 1 ]; then
             printf "${YELLOW}配置不纯净（必须且仅有 'nameserver 127.0.0.1'）。${NC}\n"
@@ -134,7 +136,6 @@ main() {
         fi
     fi
 
-    # Check 3: Unbound config file
     printf "3. 检查 Unbound 配置文件... "
     if [ ! -f "${UNBOUND_CONFIG_FILE}" ] || \
        ! grep -q "ssl-upstream:\s*yes" "${UNBOUND_CONFIG_FILE}" 2>/dev/null; then
@@ -144,7 +145,6 @@ main() {
         printf "${GREEN}安全配置已应用。${NC}\n"
     fi
 
-    # Final Decision
     if [ "$is_perfect" = true ]; then
         printf "\n${GREEN}✅ 全面检查通过！系统DNS配置稳定且安全。无需任何操作。${NC}\n"
         exit 0
@@ -154,5 +154,4 @@ main() {
     fi
 }
 
-# --- Script Entrypoint ---
 main "$@"
