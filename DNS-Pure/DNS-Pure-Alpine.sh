@@ -3,9 +3,9 @@
 # Name:         DNS-Pure-Alpine.sh
 # Description:  The ultimate, stable, and resilient script that enforces the
 #               optimal secure DNS configuration on Alpine Linux using Unbound.
-#               Version 2.2 fixes the critical root.key initialization deadlock.
+#               Version 2.3 fixes the critical unbound data directory creation.
 # Author:       rTnrWE
-# Version:      2.2 (The Final Alpine Chapter)
+# Version:      2.3 (The Final Alpine Chapter)
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.sh | sh
@@ -17,7 +17,7 @@ set -eu
 # --- Global Constants ---
 readonly UNBOUND_CONFIG_FILE="/etc/unbound/unbound.conf"
 readonly SECURE_UNBOUND_CONFIG="server:
-    verbosity: 0 # Reduce log noise in normal operation
+    verbosity: 0
     interface: 127.0.0.1
     interface: ::1
     port: 53
@@ -30,13 +30,11 @@ readonly SECURE_UNBOUND_CONFIG="server:
     harden-glue: yes
     harden-dnssec-stripped: yes
     use-caps-for-id: yes
-    # Trust the managed DNSSEC root keys
     auto-trust-anchor-file: \"/var/lib/unbound/root.key\"
     
     # Enable DNS over TLS (DoT)
     ssl-upstream: yes
 
-# Forward all queries to secure DoT servers
 forward-zone:
     name: \".\"
     forward-addr: 8.8.8.8@853#dns.google
@@ -44,14 +42,15 @@ forward-zone:
     forward-addr: 2001:4860:4860::8888@853#dns.google
     forward-addr: 2606:4700:4700::1111@853#cloudflare-dns.com
 "
-readonly GREEN="\033[0;32m"
+readonly GREEN="\033[0;2m" # Dim green for less important logs
 readonly YELLOW="\033[1;33m"
 readonly RED="\033[0;31m"
 readonly NC="\033[0m"
+readonly BOLD_GREEN="\033[1;32m"
 
 # --- Helper Functions ---
 
-log() { printf -- "${GREEN}--> %s${NC}\n" "$1"; }
+log() { printf -- "${BOLD_GREEN}--> %s${NC}\n" "$1"; }
 log_warn() { printf -- "${YELLOW}--> %s${NC}\n" "$1"; }
 log_error() { printf -- "${RED}--> %s${NC}\n" "$1" >&2; }
 
@@ -71,9 +70,13 @@ purify_and_harden_dns_alpine() {
         apk -U --no-cache add unbound
     fi
 
-    # CRITICAL FIX: Initialize the DNSSEC root trust anchor BEFORE starting unbound.
+    # CRITICAL FIX v2.3: Ensure the data directory for unbound exists.
+    log "正在创建 Unbound 数据目录..."
+    mkdir -p "/var/lib/unbound/"
+    log "${GREEN}✅ 数据目录 /var/lib/unbound/ 已确保存在。${NC}"
+
+    # CRITICAL FIX v2.2: Initialize the DNSSEC root trust anchor.
     log "正在初始化 DNSSEC 根信任锚 (root.key)..."
-    # This command uses built-in IPs and does not depend on system DNS.
     unbound-anchor -a "/var/lib/unbound/root.key"
     log "${GREEN}✅ root.key 已成功生成。${NC}"
 
@@ -91,12 +94,12 @@ purify_and_harden_dns_alpine() {
     rc-update add unbound default
     rc-service unbound restart
 
-    printf "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}\n"
+    printf "\n${BOLD_GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}\n"
     printf -- "----------------------------------------------------\n"
     printf "最终 /etc/resolv.conf 内容:\n"
     cat /etc/resolv.conf
     printf -- "----------------------------------------------------\n"
-    printf "\n正在使用 'nslookup' 进行一次真实的DoT+DNSSEC查询测试...\n"
+    printf "\n正在使用 'nslookup' 进行一次真实的DoT查询测试 (查询 google.com)...\n"
     nslookup google.com 127.0.0.1
     printf -- "----------------------------------------------------\n"
 }
@@ -146,7 +149,7 @@ main() {
     fi
 
     if [ "$is_perfect" = true ]; then
-        printf "\n${GREEN}✅ 全面检查通过！系统DNS配置稳定且安全。无需任何操作。${NC}\n"
+        printf "\n${BOLD_GREEN}✅ 全面检查通过！系统DNS配置稳定且安全。无需任何操作。${NC}\n"
         exit 0
     else
         printf "\n${YELLOW}--> 一项或多项检查未通过。将执行完整的净化与加固流程...${NC}\n"
