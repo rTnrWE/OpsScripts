@@ -3,9 +3,9 @@
 # Name:         DNS-Pure-Alpine.sh
 # Description:  The ultimate, stable, and resilient script that enforces the
 #               optimal secure DNS configuration on Alpine Linux using Unbound.
-#               It performs a comprehensive health check on all known conflict points.
+#               Version 2.2 provides the final, correct, and robust implementation.
 # Author:       rTnrWE
-# Version:      2.0 (The Guardian)
+# Version:      2.2 (The Final Alpine Chapter)
 #
 # Usage:
 # curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure-Alpine.sh | sh
@@ -50,32 +50,20 @@ readonly NC="\033[0m"
 
 # --- Helper Functions ---
 
-log() { echo "${GREEN}--> $1${NC}"; }
-log_warn() { echo "${YELLOW}--> $1${NC}"; }
-log_error() { echo "${RED}--> $1${NC}" >&2; }
+log() { printf -- "${GREEN}--> %s${NC}\n" "$1"; }
+log_warn() { printf -- "${YELLOW}--> %s${NC}\n" "$1"; }
+log_error() { printf -- "${RED}--> %s${NC}\n" "$1" >&2; }
 
 # The main function to install, repair, and configure Unbound
 purify_and_harden_dns_alpine() {
-    echo "\n--- 开始执行DNS净化与安全加固流程 (Unbound) ---"
+    printf "\n--- 开始执行DNS净化与安全加固流程 (Unbound) ---\n"
 
-    # --- STAGE 1: NEUTRALIZE CONFLICTS ---
-    log "阶段一：正在清除所有潜在的DNS冲突源..."
-
-    # 1a. Purge legacy DNS settings from /etc/network/interfaces
     interfaces_file="/etc/network/interfaces"
     if [ -f "$interfaces_file" ] && grep -qE '^[[:space:]]*dns-(nameservers|search|domain)' "$interfaces_file"; then
         log "正在净化 /etc/network/interfaces 中的厂商残留DNS配置..."
         sed -i -E 's/^[[:space:]]*(dns-(nameservers|search|domain).*)/# \1/' "$interfaces_file"
         log "${GREEN}✅ 旧有DNS配置已成功注释禁用。${NC}"
     fi
-
-    # 1b. Tame the DHCP client (udhcpc is common in Alpine)
-    # The default script is at /usr/share/udhcpc/default.script.
-    # We can create a post-bound hook in /etc/udhcpc/bound to override DNS.
-    # A simpler, more direct approach is just to control resolv.conf directly.
-
-    # --- STAGE 2: INSTALL AND CONFIGURE UNBOUND ---
-    log "阶段二：正在配置 Unbound..."
 
     if ! command -v unbound >/dev/null; then
         log "正在安装 unbound..."
@@ -85,32 +73,27 @@ purify_and_harden_dns_alpine() {
     log "正在应用 Unbound 安全优化配置 (DoT & DNSSEC)..."
     echo "${SECURE_UNBOUND_CONFIG}" > "${UNBOUND_CONFIG_FILE}"
 
-    # --- STAGE 3: ENFORCE SYSTEM DNS ---
-    log "阶段三：正在强制系统使用 Unbound..."
-    
-    # This ensures our setting has the highest priority
+    log "正在强制系统使用本地 Unbound 解析器..."
     echo "nameserver 127.0.0.1" > /etc/resolv.conf.head
-    
-    # This makes the change immediate and persistent
-    resolvconf -u
-    # Final forceful overwrite to ensure purity
+    if command -v resolvconf >/dev/null; then
+        resolvconf -u
+    fi
+    # Final forceful overwrite to ensure purity, works even if resolvconf is not installed
     echo "nameserver 127.0.0.1" > /etc/resolv.conf
     
     log "正在启用并启动 unbound 服务..."
     rc-update add unbound default
     rc-service unbound restart
 
-    # --- STAGE 4: FINAL VERIFICATION ---
-    echo "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}"
-    echo "----------------------------------------------------"
-    echo "最终 /etc/resolv.conf 内容:"
+    printf "\n${GREEN}✅ 全部操作完成！以下是最终的 DNS 状态：${NC}\n"
+    printf -- "----------------------------------------------------\n"
+    printf "最终 /etc/resolv.conf 内容:\n"
     cat /etc/resolv.conf
-    echo "----------------------------------------------------"
-    echo "\n正在使用 'nslookup' 进行一次真实的DoT+DNSSEC查询测试..."
-    echo "注意：对于DNSSEC测试域名，返回 'SERVFAIL' 是 Unbound 严格验证模式下【正确】的行为。"
+    printf -- "----------------------------------------------------\n"
+    printf "\n正在使用 'nslookup' 进行一次真实的DoT+DNSSEC查询测试...\n"
+    printf "注意：对于DNSSEC测试域名，返回 'SERVFAIL' 是 Unbound 严格验证模式下【正确】的行为。\n"
     nslookup sigok.verteiltesysteme.net 127.0.0.1
-    echo "----------------------------------------------------"
-    echo "${GREEN}请检查上面的 'nslookup' 输出是否表明查询是发往 'Server: 127.0.0.1'。${NC}"
+    printf -- "----------------------------------------------------\n"
 }
 
 # --- Main Logic ---
@@ -120,46 +103,53 @@ main() {
        exit 1
     fi
 
-    echo "--- 开始执行全面系统DNS健康检查 (Alpine) ---"
+    printf -- "--- 开始执行全面系统DNS健康检查 (Alpine) ---\n"
     
     is_perfect=true
 
     # Check 1: Unbound service status
     printf "1. 检查 Unbound 服务状态... "
     if ! rc-service unbound status &>/dev/null; then
-        echo "${YELLOW}服务未运行。${NC}"
+        printf "${YELLOW}服务未运行。${NC}\n"
         is_perfect=false
     else
-        echo "${GREEN}正在运行。${NC}"
+        printf "${GREEN}正在运行。${NC}\n"
     fi
 
-    # Check 2: resolv.conf purity
+    # Check 2: resolv.conf purity (Robust, POSIX-compliant check)
     printf "2. 检查 /etc/resolv.conf 配置... "
-    if [ ! -f /etc/resolv.conf ] || \
-       ! grep -qE "^\s*nameserver\s+127\.0\.0\.1\s*$" /etc/resolv.conf || \
-       grep -qE "^\s*nameserver\s+(?!127\.0\.0\.1)" /etc/resolv.conf; then
-        echo "${YELLOW}配置不纯净或不正确。${NC}"
+    resolv_file="/etc/resolv.conf"
+    if [ ! -f "$resolv_file" ]; then
+        printf "${YELLOW}文件不存在。${NC}\n"
         is_perfect=false
     else
-        echo "${GREEN}配置纯净。${NC}"
+        # It must contain 127.0.0.1, and the total number of nameservers must be exactly 1.
+        has_localhost=$(grep -c "nameserver 127.0.0.1" "$resolv_file" || true) # Use || true to prevent exit on no match
+        nameserver_count=$(grep -c "nameserver" "$resolv_file" || true)
+        if [ "$has_localhost" -ne 1 ] || [ "$nameserver_count" -ne 1 ]; then
+            printf "${YELLOW}配置不纯净（必须且仅有 'nameserver 127.0.0.1'）。${NC}\n"
+            is_perfect=false
+        else
+            printf "${GREEN}配置纯净。${NC}\n"
+        fi
     fi
 
     # Check 3: Unbound config file
     printf "3. 检查 Unbound 配置文件... "
     if [ ! -f "${UNBOUND_CONFIG_FILE}" ] || \
-       ! grep -q "ssl-upstream:\s*yes" "${UNBOUND_CONFIG_FILE}" &>/dev/null; then
-        echo "${YELLOW}安全配置 (DoT) 未应用。${NC}"
+       ! grep -q "ssl-upstream:\s*yes" "${UNBOUND_CONFIG_FILE}" 2>/dev/null; then
+        printf "${YELLOW}安全配置 (DoT) 未应用。${NC}\n"
         is_perfect=false
     else
-        echo "${GREEN}安全配置已应用。${NC}"
+        printf "${GREEN}安全配置已应用。${NC}\n"
     fi
 
     # Final Decision
     if [ "$is_perfect" = true ]; then
-        echo "\n${GREEN}✅ 全面检查通过！系统DNS配置稳定且安全。无需任何操作。${NC}"
+        printf "\n${GREEN}✅ 全面检查通过！系统DNS配置稳定且安全。无需任何操作。${NC}\n"
         exit 0
     else
-        echo "\n${YELLOW}--> 一项或多项检查未通过。为了确保系统的长期稳定，将执行完整的净化与加固流程...${NC}"
+        printf "\n${YELLOW}--> 一项或多项检查未通过。将执行完整的净化与加固流程...${NC}\n"
         purify_and_harden_dns_alpine
     fi
 }
