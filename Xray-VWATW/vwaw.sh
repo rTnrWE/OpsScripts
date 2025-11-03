@@ -41,8 +41,25 @@ TUNNEL_NAME=""
 # --- Utility Functions ---
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        echo -e "${RED}错误: 此脚本必须以root用户权限运行。${NC}"; exit 1;
+        echo -e "${RED}错误: 此脚本必须以root用户权限运行。${NC}" >&2
+        exit 1
     fi
+}
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
 pause_for_user() {
@@ -56,11 +73,16 @@ load_tunnel_name_from_config() {
         local uuid_from_config
         uuid_from_config=$(awk '/^tunnel:/ {print $2}' "${CLOUDFLARED_CONFIG_PATH}" 2>/dev/null)
         if [ -n "$uuid_from_config" ]; then
+            # Check for cert.pem before attempting cloudflared commands
+            if [ ! -f "/root/.cloudflared/cert.pem" ]; then
+                log_warning "Cloudflared 授权凭证 (cert.pem) 未找到，无法加载隧道名称。请运行选项 2 重新授权。"
+                return 1
+            fi
             # Attempt to get tunnel name using cloudflared list command if UUID is found
             # Requires jq for parsing JSON output
             if command -v cloudflared &> /dev/null && command -v jq &> /dev/null; then
                 local name_from_list
-                name_from_list=$(cloudflared tunnel list --json 2>/dev/null | jq -r --arg uuid "$uuid_from_config" '.[] | select(.uuid == $uuid) | .name')
+                name_from_list=$(cloudflared tunnel list --json 2>/dev/null | jq -r --arg uuid "$uuid_from_config" '.[] | select(.uuid == $uuid) | .name' 2>/dev/null)
                 if [ -n "$name_from_list" ] && [ "$name_from_list" != "null" ]; then
                     TUNNEL_NAME="$name_from_list"
                     return 0
@@ -77,56 +99,73 @@ load_tunnel_name_from_config() {
 # --- Xray Update Check Function ---
 check_xray_update() {
     if ! command -v xray &> /dev/null; then
-        echo "Xray 未安装，无法检查更新。"; return 1;
+        log_error "Xray 未安装，无法检查更新。"
+        return 1
     fi
 
     # Get current Xray version (e.g., "1.8.3")
     local current_version
-    current_version=$(xray version 2>/dev/null | head -n1 | grep -oP 'Xray\s+v\K[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "unknown")
+    current_version=$(xray version 2>/dev/null | head -n1 | awk '{print $2}' | cut -d'(' -f1 | tr -d 'v' || echo "unknown")
 
-    if [ "$current_version" = "unknown" ]; then
-        echo "无法获取当前 Xray 版本。"; return 1;
+    if [ "$current_version" = "unknown" ] || [ -z "$current_version" ]; then
+        log_error "无法获取当前 Xray 版本。"
+        return 1
     fi
 
-    echo "当前 Xray 版本: v${current_version}"
+    log_info "当前 Xray 版本: $current_version"
 
     # Ensure jq is installed for JSON parsing
     if ! command -v jq &> /dev/null; then
-        apt-get update && apt-get install -y jq
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: jq 安装失败。${NC}"; return 1;
+        log_info "正在安装依赖 jq 用于格式化JSON..."
+        if ! apt-get update || ! apt-get install -y jq; then
+            log_error "jq 安装失败。请手动安装 (apt-get install -y jq)。"
+            return 1
         fi
+        log_success "jq 安装成功。"
     fi
 
     # Fetch latest stable release from GitHub API
-    local latest_version
-    latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name // empty' 2>/dev/null | sed 's/v//' || echo "unknown")
-
-    if [ "$latest_version" = "unknown" ] || [ -z "$latest_version" ]; then
-        echo "无法获取最新 Xray 版本。"; return 1;
+    local api_output
+    api_output=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null)
+    if [ -z "$api_output" ]; then
+        log_error "无法获取 GitHub API 响应。"
+        return 1
     fi
 
-    echo "最新 Xray 版本: v${latest_version}"
+    local latest_version
+    latest_version=$(echo "$api_output" | jq -r '.tag_name // empty' 2>/dev/null | sed 's/^v//' || echo "unknown")
+
+    if [ "$latest_version" = "unknown" ] || [ -z "$latest_version" ]; then
+        log_error "无法获取最新 Xray 版本。"
+        return 1
+    fi
 
     # Compare versions (semantic versioning): if latest > current
-    if [[ $(printf '%s\n' "${current_version}" "${latest_version}" | sort -V | head -n1) == "${current_version}" && "${current_version}" != "${latest_version}" ]]; then
-        echo -e "${YELLOW}检测到新版本可用: v${latest_version}${NC}"
+    if [[ $(printf '%s\n' "$current_version" "$latest_version" | sort -V | head -n1) == "$current_version" && "$current_version" != "$latest_version" ]]; then
+        log_warning "检测到新版本可用: $latest_version"
         read -rp "是否立即更新 Xray-core? [y/N]: " update_choice
         if [[ "${update_choice}" =~ ^[yY]$ ]]; then
-            echo "正在更新 Xray-core 到 v${latest_version}..."
-            systemctl stop xray 2>/dev/null || true
-            bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}错误: Xray-core 更新失败。${NC}"; return 1;
+            log_info "正在更新 Xray-core 到 $latest_version..."
+            if ! systemctl stop xray 2>/dev/null; then
+                log_warning "Xray 服务停止失败（可能未运行）。"
             fi
-            systemctl start xray 2>/dev/null || true
-            echo -e "${GREEN}Xray-core 更新成功。${NC}"
-            return 0;
+            if ! bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install; then
+                log_error "Xray-core 更新失败。"
+                return 1
+            fi
+            if ! systemctl start xray 2>/dev/null; then
+                log_error "Xray 服务启动失败。"
+                return 1
+            fi
+            log_success "Xray-core 更新成功。"
+            return 0
         else
-            echo "更新已取消。"; return 1;
+            log_info "更新已取消。"
+            return 1
         fi
     else
-        echo "当前版本已是最新。"; return 0;
+        log_success "当前版本已是最新。"
+        return 0
     fi
 }
 
@@ -149,16 +188,15 @@ check_all_states() {
     # Check for WireProxy, and ensure lsof is installed for status check
     if [ -f "/etc/wireguard/proxy.conf" ]; then
         STATE_WIREPROXY_INSTALLED=true
-        local port; port=$(awk '/^\[Socks5\]/{f=1} f && /BindAddress/{split($3, a, ":"); print a[2]; exit}' "/etc/wireguard/proxy.conf" 2>/dev/null)
+        local port; port=$(awk '/^\[Socks5\]/{f=1} f && /BindAddress/{split($3, a, ":"); print a[2]; exit}' "/etc/wireguard/proxy.conf" 2>/dev/null | tr -d ' \t\r\n')
         
         # Ensure lsof is installed before attempting to use it for status check
         if ! command -v lsof &> /dev/null; then
-            echo -e "${YELLOW}警告: 依赖工具 'lsof' 未安装，正在尝试安装...${NC}"
-            apt-get update && apt-get install -y lsof
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}错误: 'lsof' 安装失败。WireProxy 服务状态可能无法准确检测。${NC}"
+            log_warning "依赖工具 'lsof' 未安装，正在尝试安装..."
+            if ! apt-get update || ! apt-get install -y lsof; then
+                log_error "'lsof' 安装失败。WireProxy 服务状态可能无法准确检测。"
             else
-                echo -e "${GREEN}'lsof' 安装成功。${NC}"
+                log_success "'lsof' 安装成功。"
             fi
         fi
 
@@ -166,7 +204,7 @@ check_all_states() {
         if command -v lsof &> /dev/null; then
             if [[ -n "$port" ]] && lsof -i:"$port" >/dev/null 2>&1; then STATE_WIREPROXY_SERVICE_RUNNING=true; fi
         else
-            echo -e "${YELLOW}警告: 'lsof' 不可用，无法准确检测 WireProxy 服务运行状态。${NC}"
+            log_warning "'lsof' 不可用，无法准确检测 WireProxy 服务运行状态。"
         fi
     fi
 }
@@ -176,53 +214,55 @@ check_all_states() {
 manage_xray() {
     echo -e "\n--- Xray Core & 配置管理 ---"
     if ! ${STATE_XRAY_INSTALLED}; then
-        echo ">>> 正在安装 Xray-core..."
-        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: Xray-core 安装失败。请检查网络或脚本权限。${NC}"; return 1;
+        log_info "正在安装 Xray-core..."
+        if ! bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install; then
+            log_error "Xray-core 安装失败。请检查网络或脚本权限。"
+            return 1
         fi
+        log_success "Xray-core 安装成功。"
     else
-        echo "Xray Core 已安装，正在检查更新..."
-        check_xray_update
+        log_info "Xray Core 已安装，正在检查更新..."
+        check_xray_update || true  # Don't fail the whole function on update skip
     fi
     if ! command -v jq &> /dev/null; then
-        echo ">>> 正在安装依赖 jq 用于格式化JSON..."
-        apt-get update && apt-get install -y jq
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: jq 安装失败。请手动安装 (apt-get install -y jq)。${NC}"; return 1;
+        log_info "正在安装依赖 jq 用于格式化JSON..."
+        if ! apt-get update || ! apt-get install -y jq; then
+            log_error "jq 安装失败。请手动安装 (apt-get install -y jq)。"
+            return 1
         fi
+        log_success "jq 安装成功。"
     fi
 
-    echo ">>> 正在生成/更新 Xray 配置文件..."
+    log_info "正在生成/更新 Xray 配置文件..."
     local vless_uuid ws_path
     
     if ${STATE_XRAY_CONFIG_VALID}; then
-        echo "检测到现有有效配置，将保留UUID和Path。"
+        log_info "检测到现有有效配置，将保留UUID和Path。"
         vless_uuid=$(jq -r '.inbounds[0].settings.clients[0].id' ${XRAY_CONFIG_PATH})
         ws_path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' ${XRAY_CONFIG_PATH})
     else
-        echo "未找到有效配置或首次安装，将生成新的UUID和Path。"
+        log_info "未找到有效配置或首次安装，将生成新的UUID和Path。"
         vless_uuid=$(xray uuid)
         local ws_path_uuid; ws_path_uuid=$(xray uuid)
         ws_path="/${ws_path_uuid}-ws"
     fi
 
-    local outbound_config_json
+    local outbounds_json
     check_all_states # Re-check states to ensure WireProxy status is current
     if ${STATE_WIREPROXY_INSTALLED}; then
-        echo "检测到WireProxy已安装，Xray出站将配置为SOCKS5代理。"
-        local port; port=$(awk '/^\[Socks5\]/{f=1} f && /BindAddress/{split($3, a, ":"); print a[2]; exit}' "/etc/wireguard/proxy.conf" 2>/dev/null)
-        outbound_config_json='{"protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":'${port:-40000}'}]},"tag":"proxy"},{"protocol":"freedom","tag":"direct"}'
+        log_info "检测到WireProxy已安装，Xray出站将配置为SOCKS5代理。"
+        local port; port=$(awk '/^\[Socks5\]/{f=1} f && /BindAddress/{split($3, a, ":"); print a[2]; exit}' "/etc/wireguard/proxy.conf" 2>/dev/null | tr -d ' \t\r\n')
+        outbounds_json=$(jq -n --argjson port_num "${port:-40000}" '[ {"protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port": ($port_num | tonumber)} ] },"tag":"proxy"} , {"protocol":"freedom","tag":"direct"} ]')
     else
-        echo "未检测到WireProxy，Xray出站将配置为直接连接。"
-        outbound_config_json='{"protocol":"freedom","tag":"direct"}'
+        log_info "未检测到WireProxy，Xray出站将配置为直接连接。"
+        outbounds_json='[{"protocol":"freedom","tag":"direct"}]'
     fi
 
     local config_json
     config_json=$(jq -n \
         --arg vless_uuid "$vless_uuid" \
         --arg ws_path "$ws_path" \
-        --argjson outbounds "[$outbound_config_json]" \
+        --argjson outbounds "$outbounds_json" \
         '{
           "log": { "loglevel": "none" },
           "dns": { "servers": [ "8.8.8.8", "1.1.1.1" ] },
@@ -239,60 +279,69 @@ manage_xray() {
           "outbounds": $outbounds
         }')
     
-    echo "${config_json}" | jq '.' > ${XRAY_CONFIG_PATH}
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}错误: Xray 配置文件写入失败。${NC}"; return 1;
+    if ! echo "$config_json" | jq '.' > "${XRAY_CONFIG_PATH}"; then
+        log_error "Xray 配置文件写入失败。"
+        return 1
     fi
-    echo "Xray 配置文件已生成/更新。"
+    log_success "Xray 配置文件已生成/更新。"
     
-    systemctl restart xray
-    if ! systemctl is-active --quiet xray; then
-        echo -e "${RED}错误: Xray 服务启动失败。请运行 'systemctl status xray' 查看日志。${NC}"; return 1;
+    if ! systemctl restart xray; then
+        log_error "Xray 服务重启失败。请运行 'systemctl status xray' 查看日志。"
+        return 1
     fi
-    echo -e "${GREEN}Xray 服务已重启。${NC}"
+    if ! systemctl is-active --quiet xray; then
+        log_error "Xray 服务启动失败。请运行 'systemctl status xray' 查看日志。"
+        return 1
+    fi
+    log_success "Xray 服务已重启。"
 }
 
 manage_cloudflared() {
     echo -e "\n--- Cloudflare Tunnel 管理 ---"
     if ! ${STATE_CLOUDFLARED_INSTALLED}; then
-        echo ">>> 正在安装 Cloudflared..."
+        log_info "正在安装 Cloudflared..."
         # Add apt-get update before installing .deb
-        apt-get update
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: apt-get update 失败。请检查网络连接。${NC}"; return 1;
+        if ! apt-get update; then
+            log_error "apt-get update 失败。请检查网络连接。"
+            return 1
         fi
-        curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: Cloudflared .deb 文件下载失败。请检查URL或网络连接。${NC}"; return 1;
+        if ! curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb; then
+            log_error "Cloudflared .deb 文件下载失败。请检查URL或网络连接。"
+            return 1
         fi
         # Use apt-get install for better dependency handling
-        apt-get install -y ./cloudflared.deb
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: Cloudflared 安装失败。请尝试 'apt-get install -f' 修复依赖，或手动安装。${NC}"; return 1;
+        if ! apt-get install -y ./cloudflared.deb; then
+            log_error "Cloudflared 安装失败。请尝试 'apt-get install -f' 修复依赖，或手动安装。"
+            return 1
         fi
         rm -f cloudflared.deb
+        log_success "Cloudflared 安装成功。"
     else
-        echo "Cloudflared 已安装。"
+        log_info "Cloudflared 已安装。"
     fi
 
     if [ -f "/root/.cloudflared/cert.pem" ]; then
-        echo -e "${YELLOW}警告: 检测到旧的Cloudflared登录凭证 (/root/.cloudflared/cert.pem)。${NC}"
+        log_warning "检测到旧的Cloudflared登录凭证 (/root/.cloudflared/cert.pem)。"
         read -rp "为避免错误，建议删除旧凭证并重新登录。是否立即删除? [y/N]: " del_cert
         if [[ "${del_cert}" =~ ^[yY]$ ]]; then
-            rm -rf /root/.cloudflared; echo "旧凭证已删除。";
+            rm -rf /root/.cloudflared
+            log_info "旧凭证已删除。"
         fi
     fi
 
     local DOMAIN
     read -rp "请输入您准备用于隧道的域名 (例如 tunnel.yourdomain.com): " DOMAIN
-    if [ -z "${DOMAIN}" ]; then echo -e "${RED}域名不能为空! 操作已取消。${NC}"; return 1; fi
+    if [ -z "${DOMAIN}" ]; then 
+        log_error "域名不能为空! 操作已取消。"
+        return 1
+    fi
     
     # --- Automated Intelligent Tunnel Naming ---
     # Replace dots with hyphens, remove leading/trailing hyphens, append -tunnel
     local generated_tunnel_name
     generated_tunnel_name=$(echo "${DOMAIN}" | sed 's/\./-/g' | sed 's/^-//' | sed 's/-$//')
     TUNNEL_NAME="${generated_tunnel_name}-tunnel" # Assign to global variable directly
-    echo -e "${BLUE}将根据域名智能生成隧道名称: ${TUNNEL_NAME}${NC}"
+    log_info "将根据域名智能生成隧道名称: ${TUNNEL_NAME}"
     # --- End Automated Intelligent Tunnel Naming ---
 
     echo -e "\n----------------------------------------------------------------"
@@ -307,82 +356,98 @@ manage_cloudflared() {
     echo -e " ${YELLOW}的URL链接，并用您【本地电脑的浏览器】打开它以完成授权。${NC}"
     echo -e "----------------------------------------------------------------\n"
     
-    cloudflared tunnel login
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}错误: Cloudflared 登录授权失败。请检查网络或您的Cloudflare账户。${NC}"; return 1;
+    if ! cloudflared tunnel login; then
+        log_error "Cloudflared 登录授权失败。请检查网络或您的Cloudflare账户。"
+        return 1
     fi
     
     echo -e "\n----------------------------------------------------------------"
     read -rp " 授权成功后，请回到本终端，然后按 [Enter] 键继续..."
     
     if [ ! -f "/root/.cloudflared/cert.pem" ]; then
-        echo -e "\n${RED}错误: 未检测到授权凭证文件 (cert.pem)。${NC}"
-        echo -e "${YELLOW}授权似乎未成功。请重新运行此选项。${NC}"; return 1;
+        log_error "未检测到授权凭证文件 (cert.pem)。"
+        log_warning "授权似乎未成功。请重新运行此选项。"
+        return 1
     fi
-    echo -e "${GREEN}授权凭证检测成功。${NC}"
+    log_success "授权凭证检测成功。"
 
-    echo ">>> 正在创建 Tunnel (如果 '${TUNNEL_NAME}' 已存在, 请先在Cloudflare后台手动删除)..."
+    log_info "正在创建 Tunnel (如果 '${TUNNEL_NAME}' 已存在, 请先在Cloudflare后台手动删除)..."
     local create_output_file; create_output_file=$(mktemp)
-    cloudflared tunnel create "${TUNNEL_NAME}" > "${create_output_file}" 2>&1
+    if ! cloudflared tunnel create "${TUNNEL_NAME}" > "${create_output_file}" 2>&1; then
+        log_warning "--- cloudflared tunnel create command output ---"
+        cat "${create_output_file}"
+        log_warning "--- End of output ---"
+        log_error "创建 Tunnel 失败!"
+        log_warning "错误信息: $(cat "${create_output_file}")"
+        log_warning "最常见的原因是同名隧道 '${TUNNEL_NAME}' 已存在。请在Cloudflare Zero Trust仪表盘中检查并删除旧隧道后重试。"
+        rm -f "${create_output_file}"
+        return 1
+    fi
     
-    # Debugging output for robustness (can be removed in final version if desired)
-    echo -e "${YELLOW}--- cloudflared tunnel create command output ---${NC}"
-    cat "${create_output_file}"
-    echo -e "${YELLOW}--- End of output ---${NC}"
-
     # Improved error checking for tunnel creation
     if grep -qi "Error" "${create_output_file}" || ! grep -qP '[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}' "${create_output_file}"; then
-        echo -e "${RED}创建 Tunnel 失败! ${NC}";
-        echo -e "${YELLOW}错误信息: $(cat "${create_output_file}")${NC}";
-        echo -e "${YELLOW}最常见的原因是同名隧道 '${TUNNEL_NAME}' 已存在。请在Cloudflare Zero Trust仪表盘中检查并删除旧隧道后重试。${NC}";
-        rm -f "${create_output_file}"; return 1;
+        log_error "创建 Tunnel 失败!"
+        log_warning "错误信息: $(cat "${create_output_file}")"
+        log_warning "最常见的原因是同名隧道 '${TUNNEL_NAME}' 已存在。请在Cloudflare Zero Trust仪表盘中检查并删除旧隧道后重试。"
+        rm -f "${create_output_file}"
+        return 1
     fi
     
-    local tunnel_uuid; tunnel_uuid=$(grep -oP '[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}' "${create_output_file}" | head -n 1); rm -f "${create_output_file}";
+    local tunnel_uuid; tunnel_uuid=$(grep -oP '[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}' "${create_output_file}" | head -n 1); rm -f "${create_output_file}"
     if [ -z "$tunnel_uuid" ]; then
-        echo -e "${RED}无法从输出中提取 Tunnel UUID。${NC}";
-        echo -e "${YELLOW}Cloudflared工具的输出格式可能已更改，请检查脚本。${NC}"; return 1;
+        log_error "无法从输出中提取 Tunnel UUID。"
+        log_warning "Cloudflared工具的输出格式可能已更改，请检查脚本。"
+        return 1
     fi
-    echo "Tunnel 创建成功, UUID: ${tunnel_uuid}"
+    log_success "Tunnel 创建成功, UUID: ${tunnel_uuid}"
     
     mkdir -p ${CLOUDFLARED_CONFIG_DIR}
     local credentials_file="/root/.cloudflared/${tunnel_uuid}.json"
     
-    printf "tunnel: %s\n" "${tunnel_uuid}" > "${CLOUDFLARED_CONFIG_PATH}"
-    printf "credentials-file: %s\n" "${credentials_file}" >> "${CLOUDFLARED_CONFIG_PATH}"
-    printf "ingress:\n" >> "${CLOUDFLARED_CONFIG_PATH}"
-    printf "  - hostname: %s\n" "${DOMAIN}" >> "${CLOUDFLARED_CONFIG_PATH}"
-    printf "    service: http://localhost:12861\n" >> "${CLOUDFLARED_CONFIG_PATH}"
-    printf "  - service: http_status:404\n" >> "${CLOUDFLARED_CONFIG_PATH}"
+    {
+        printf "tunnel: %s\n" "${tunnel_uuid}"
+        printf "credentials-file: %s\n" "${credentials_file}"
+        printf "ingress:\n"
+        printf "  - hostname: %s\n" "${DOMAIN}"
+        printf "    service: http://localhost:12861\n"
+        printf "  - service: http_status:404\n"
+    } > "${CLOUDFLARED_CONFIG_PATH}"
     if [ $? -ne 0 ]; then
-        echo -e "${RED}错误: Cloudflared 配置文件写入失败。${NC}"; return 1;
+        log_error "Cloudflared 配置文件写入失败。"
+        return 1
     fi
-    echo "Cloudflared 配置文件生成成功。"
+    log_success "Cloudflared 配置文件生成成功。"
 
-    echo ">>> 正在将域名路由到 Tunnel..."
+    log_info "正在将域名路由到 Tunnel..."
     local route_output
-    route_output=$(cloudflared tunnel route dns "${TUNNEL_NAME}" "${DOMAIN}" 2>&1) # Use dynamic TUNNEL_NAME
+    route_output=$(cloudflared tunnel route dns "${TUNNEL_NAME}" "${DOMAIN}" 2>&1)
     if echo "${route_output}" | grep -qi "Error"; then
-        echo -e "${RED}DNS路由失败! ${NC}"; echo -e "${YELLOW}错误信息: ${route_output}${NC}";
-        echo -e "${YELLOW}最常见的原因是DNS记录已存在。请登录CF后台检查并删除后重试。${NC}"; return 1;
+        log_error "DNS路由失败!"
+        log_warning "错误信息: ${route_output}"
+        log_warning "最常见的原因是DNS记录已存在。请登录CF后台检查并删除后重试。"
+        return 1
     fi
-    echo "DNS路由成功。"
+    log_success "DNS路由成功。"
     
     # Install service only if not already installed, then start/enable
     if [ ! -f "/etc/systemd/system/cloudflared.service" ]; then
-        cloudflared service install
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: Cloudflared systemd 服务安装失败。${NC}"; return 1;
+        if ! cloudflared service install; then
+            log_error "Cloudflared systemd 服务安装失败。"
+            return 1
         fi
     fi
-    systemctl start cloudflared; systemctl enable cloudflared;
-    if ! systemctl is-active --quiet cloudflared; then
-        echo -e "${RED}错误: Cloudflared 服务启动失败。请运行 'systemctl status cloudflared' 查看日志。${NC}"; return 1;
+    if ! systemctl start cloudflared || ! systemctl enable cloudflared; then
+        log_error "Cloudflared 服务启动或启用失败。"
+        return 1
     fi
-    echo -e "${GREEN}Cloudflare Tunnel 已配置并启动。${NC}"
+    if ! systemctl is-active --quiet cloudflared; then
+        log_error "Cloudflared 服务启动失败。请运行 'systemctl status cloudflared' 查看日志。"
+        return 1
+    fi
+    log_success "Cloudflare Tunnel 已配置并启动。"
     
-    echo ">>> 正在自动同步Xray配置以确保联动..."
-    manage_xray
+    log_info "正在自动同步Xray配置以确保联动..."
+    manage_xray || log_warning "Xray 配置同步失败，但 Cloudflared 已就绪。"
 }
 
 manage_wireproxy() {
@@ -395,44 +460,45 @@ manage_wireproxy() {
     echo "----------------------------------------------------------------"
     
     if [ ! -f "${WARP_SCRIPT_PATH}" ]; then
-        echo ">>> 正在下载并安装 WireProxy (fscarmen) 脚本..."
+        log_info "正在下载并安装 WireProxy (fscarmen) 脚本..."
         # Ensure the directory exists before downloading
-        mkdir -p "$(dirname "${WARP_SCRIPT_PATH}")"
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: 无法创建目录 $(dirname "${WARP_SCRIPT_PATH}")。请检查权限。${NC}"; return 1;
-        fi
+        mkdir -p "$(dirname "${WARP_SCRIPT_PATH}")" || {
+            log_error "无法创建目录 $(dirname "${WARP_SCRIPT_PATH}")。请检查权限。"
+            return 1
+        }
 
-        wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O ${WARP_SCRIPT_PATH}
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: WireProxy (fscarmen) 脚本下载失败。请检查URL或网络连接。${NC}"; return 1;
+        if ! wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh -O "${WARP_SCRIPT_PATH}"; then
+            log_error "WireProxy (fscarmen) 脚本下载失败。请检查URL或网络连接。"
+            return 1
         fi
-        chmod +x ${WARP_SCRIPT_PATH}
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误: WireProxy (fscarmen) 脚本添加执行权限失败。${NC}"; return 1;
+        if ! chmod +x "${WARP_SCRIPT_PATH}"; then
+            log_error "WireProxy (fscarmen) 脚本添加执行权限失败。"
+            return 1
         fi
-        echo -e "${GREEN}WireProxy (fscarmen) 脚本下载并设置权限成功。${NC}"
+        log_success "WireProxy (fscarmen) 脚本下载并设置权限成功。"
     else
-        echo "WireProxy (fscarmen) 脚本已存在。"
+        log_info "WireProxy (fscarmen) 脚本已存在。"
     fi
     
     # Give control to the fscarmen script
-    echo -e "${BLUE}>>> 正在运行 WireProxy (fscarmen) 脚本...${NC}"
-    ${WARP_SCRIPT_PATH}
+    log_info "正在运行 WireProxy (fscarmen) 脚本..."
+    "${WARP_SCRIPT_PATH}"
     # Check exit code of fscarmen's script itself, but only as a warning as it's interactive
     if [ $? -ne 0 ]; then
-        echo -e "${YELLOW}警告: fscarmen 的 WireProxy 脚本可能未能成功执行。请检查其输出。${NC}"
+        log_warning "fscarmen 的 WireProxy 脚本可能未能成功执行。请检查其输出。"
     fi
     
     echo "----------------------------------------------------------------"
     echo "fscarmen脚本已退出。"
-    echo "正在自动为您同步Xray配置以适应新状态..."
+    log_info "正在自动为您同步Xray配置以适应新状态..."
     # This is the key linkage: after installing/managing WireProxy, auto-update Xray config.
-    manage_xray
+    manage_xray || log_warning "Xray 配置同步失败，但 WireProxy 操作已完成。"
 }
 
 display_config_info() {
     if ! ${STATE_XRAY_CONFIG_VALID} || ! ${STATE_TUNNEL_CONFIG_VALID}; then
-        echo -e "\n${RED}未找到完整的核心配置文件 (Xray 或 Cloudflared)，无法显示。${NC}"; return;
+        log_error "未找到完整的核心配置文件 (Xray 或 Cloudflared)，无法显示。"
+        return 1
     fi
     
     # Ensure TUNNEL_NAME is loaded for display if script was just run without manage_cloudflared
@@ -441,14 +507,14 @@ display_config_info() {
     fi
 
     local vless_uuid ws_path domain port
-    vless_uuid=$(jq -r '.inbounds[0].settings.clients[0].id' ${XRAY_CONFIG_PATH})
-    ws_path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' ${XRAY_CONFIG_PATH})
-    domain=$(grep -oP 'hostname: \K.*' ${CLOUDFLARED_CONFIG_PATH} | tr -d ' ')
+    vless_uuid=$(jq -r '.inbounds[0].settings.clients[0].id' "${XRAY_CONFIG_PATH}")
+    ws_path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' "${XRAY_CONFIG_PATH}")
+    domain=$(grep -oP 'hostname: \K.*' "${CLOUDFLARED_CONFIG_PATH}" | tr -d ' ')
     local encoded_path; encoded_path=$(echo "${ws_path}" | sed 's/\//%2F/g')
 
     clear
     echo "==================== VWAW Final Configuration ===================="
-    echo "Tunnel Name:       ${TUNNEL_NAME:-未设置}" # Display the actual tunnel name, or "未设置" if empty
+    echo "Tunnel Name:       ${TUNNEL_NAME:-未设置}"
     echo "Address:           ${domain}"
     echo "Port:              443"
     echo "UUID:              ${vless_uuid}"
@@ -465,18 +531,18 @@ display_config_info() {
     echo "----------------------------------------------------------------"
     echo -e "${GREEN}Outbound Status:${NC}"
     if ${STATE_WIREPROXY_SERVICE_RUNNING}; then
-        port=$(awk '/^\[Socks5\]/{f=1} f && /BindAddress/{split($3, a, ":"); print a[2]; exit}' "/etc/wireguard/proxy.conf" 2>/dev/null)
+        port=$(awk '/^\[Socks5\]/{f=1} f && /BindAddress/{split($3, a, ":"); print a[2]; exit}' "/etc/wireguard/proxy.conf" 2>/dev/null | tr -d ' \t\r\n')
         echo "WireProxy: true"
         echo "SOCKS5 Port: ${port}"
         
         echo "Checking WARP IPs... (this may take a moment)"
-        local ipv4; local ipv6;
+        local ipv4 ipv6
         # Check if lsof is available before trying to proxy curl
         if command -v lsof &> /dev/null; then
             ipv4=$(curl -s -4 --max-time 8 --proxy "socks5h://127.0.0.1:${port}" https://ipv4.icanhazip.com || echo "N/A")
             ipv6=$(curl -s -6 --max-time 8 --proxy "socks5h://127.0.0.1:${port}" https://ipv6.icanhazip.com || echo "N/A")
         else
-            echo -e "${YELLOW}警告: 'lsof' 不可用，无法通过 WireProxy 检查外部 IP。${NC}"
+            log_warning "'lsof' 不可用，无法通过 WireProxy 检查外部 IP。"
             ipv4="N/A (lsof missing)"
             ipv6="N/A (lsof missing)"
         fi
@@ -489,23 +555,24 @@ display_config_info() {
 }
 
 check_for_updates() {
-    echo -e "\n>>> 正在检查脚本更新..."
+    log_info "正在检查脚本更新..."
     local remote_version
-    remote_version=$(wget -qO- "${SCRIPT_URL}" | grep -oP 'SCRIPT_VERSION="\K[^"]+' || echo "unknown")
+    remote_version=$(wget -qO- "${SCRIPT_URL}" 2>/dev/null | grep -oP 'SCRIPT_VERSION="\K[^"]+' || echo "unknown")
     
     # Use sort -V for semantic version comparison
     if [[ "${remote_version}" != "unknown" && "$(printf '%s\n' "${SCRIPT_VERSION}" "${remote_version}" | sort -V | head -n 1)" != "${SCRIPT_VERSION}" ]]; then
-        echo -e "${GREEN}发现新版本: ${remote_version} (当前版本: ${SCRIPT_VERSION})${NC}"
+        log_success "发现新版本: ${remote_version} (当前版本: ${SCRIPT_VERSION})"
         read -rp "是否立即下载并运行新版本? [y/N]: " update_choice
         if [[ "${update_choice}" =~ ^[yY]$ ]]; then
-            wget --no-check-certificate "${SCRIPT_URL}" -O "$0" && chmod +x "$0"
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}错误: 脚本更新失败。请手动检查并更新。${NC}"; return 1;
+            if ! wget --no-check-certificate "${SCRIPT_URL}" -O "$0" || ! chmod +x "$0"; then
+                log_error "脚本更新失败。请手动检查并更新。"
+                return 1
             fi
-            echo "脚本已更新。正在重新启动..."; exec "$0";
+            log_success "脚本已更新。正在重新启动..."
+            exec "$0"
         fi
     else
-        echo "您当前已经是最新版本。"
+        log_success "您当前已经是最新版本。"
     fi
 }
 
@@ -522,17 +589,21 @@ view_cloudflared_logs() {
 uninstall_vwaw() {
     read -rp "警告: 此操作将卸载所有相关组件并删除配置文件。您确定吗? [y/N]: " confirm
     if [[ ! "${confirm}" =~ ^[yY]$ ]]; then
-        echo "卸载已取消。"; return;
+        log_info "卸载已取消。"
+        return
     fi
     
-    echo ">>> 正在停止并卸载 Xray..."
-    systemctl stop xray 2>/dev/null; systemctl disable xray 2>/dev/null
-    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge >/dev/null 2>&1
-    if [ $? -ne 0 ]; then echo -e "${YELLOW}Xray 卸载可能不完全，请手动检查。${NC}"; fi
+    log_info "正在停止并卸载 Xray..."
+    systemctl stop xray 2>/dev/null || true
+    systemctl disable xray 2>/dev/null || true
+    if ! bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge >/dev/null 2>&1; then
+        log_warning "Xray 卸载可能不完全，请手动检查。"
+    fi
     
-    echo ">>> 正在停止并卸载 Cloudflare Tunnel..."
-    systemctl stop cloudflared 2>/dev/null; systemctl disable cloudflared 2>/dev/null
-    cloudflared service uninstall 2>/dev/null
+    log_info "正在停止并卸载 Cloudflare Tunnel..."
+    systemctl stop cloudflared 2>/dev/null || true
+    systemctl disable cloudflared 2>/dev/null || true
+    cloudflared service uninstall 2>/dev/null || true
     
     # Determine the tunnel name to delete
     local tunnel_to_delete="${TUNNEL_NAME}"
@@ -543,35 +614,32 @@ uninstall_vwaw() {
     fi
     # As a last resort, if still empty, use a common default for uninstall attempt
     if [ -z "$tunnel_to_delete" ]; then
-        echo -e "${YELLOW}警告: 无法从配置中获取 Cloudflare Tunnel 名称。将尝试删除旧的默认隧道名 'vwaw-tunnel'。${NC}"
+        log_warning "无法从配置中获取 Cloudflare Tunnel 名称。将尝试删除旧的默认隧道名 'vwaw-tunnel'。"
         tunnel_to_delete="vwaw-tunnel"
     fi
 
     if [ -n "$tunnel_to_delete" ]; then
-        echo "尝试删除 Cloudflare Tunnel: ${tunnel_to_delete}"
+        log_info "尝试删除 Cloudflare Tunnel: ${tunnel_to_delete}"
         # Use -f for force deletion without prompt
-        cloudflared tunnel delete "${tunnel_to_delete}" -f 2>/dev/null
-        if [ $? -ne 0 ]; then
-            echo -e "${YELLOW}警告: Cloudflare Tunnel '${tunnel_to_delete}' 删除失败，请手动检查 Cloudflare Zero Trust 仪表盘。${NC}";
+        if ! cloudflared tunnel delete "${tunnel_to_delete}" -f 2>/dev/null; then
+            log_warning "Cloudflare Tunnel '${tunnel_to_delete}' 删除失败，请手动检查 Cloudflare Zero Trust 仪表盘。"
         else
-            echo -e "${GREEN}Cloudflare Tunnel '${tunnel_to_delete}' 已删除。${NC}"
+            log_success "Cloudflare Tunnel '${tunnel_to_delete}' 已删除。"
         fi
     else
-        echo -e "${YELLOW}警告: 无法确定 Cloudflare Tunnel 名称，跳过删除隧道操作。${NC}"
+        log_warning "无法确定 Cloudflare Tunnel 名称，跳过删除隧道操作。"
     fi
     
-    dpkg --purge cloudflared >/dev/null 2>&1
-    if [ $? -ne 0 ]; then echo -e "${YELLOW}Cloudflared 软件包卸载可能不完全，请手动检查。${NC}"; fi
+    dpkg --purge cloudflared >/dev/null 2>&1 || log_warning "Cloudflared 软件包卸载可能不完全，请手动检查。"
     
-    echo ">>> 正在卸载 WireProxy (如果已安装)..."
+    log_info "正在卸载 WireProxy (如果已安装)..."
     if [ -f "${WARP_SCRIPT_PATH}" ]; then
-        echo "u" | ${WARP_SCRIPT_PATH} >/dev/null 2>&1
-        if [ $? -ne 0 ]; then echo -e "${YELLOW}WireProxy 卸载可能不完全，请手动检查。${NC}"; fi
+        echo "u" | "${WARP_SCRIPT_PATH}" >/dev/null 2>&1 || log_warning "WireProxy 卸载可能不完全，请手动检查。"
     fi
     
-    echo ">>> 正在删除配置文件和残余目录..."
+    log_info "正在删除配置文件和残余目录..."
     rm -rf /usr/local/etc/xray /etc/cloudflared /etc/wireguard /root/.cloudflared
-    echo -e "${GREEN}VWAW 已成功卸载。${NC}"
+    log_success "VWAW 已成功卸载。"
 }
 
 ################################################################################
@@ -588,7 +656,7 @@ main_menu() {
         wireproxy_menu_text="[管理] WireProxy SOCKS5 代理 (fscarmen)"
     fi
 
-    local current_tunnel_name_display="${TUNNEL_NAME:-未设置}" # Display actual tunnel name or "未设置"
+    local current_tunnel_name_display="${TUNNEL_NAME:-未设置}"
     
     clear
     echo "-------------- VWAW 智能部署与管理 (v${SCRIPT_VERSION}) --------------"
@@ -603,7 +671,6 @@ main_menu() {
     echo " [ 服务运行状态 ]"
     echo -e "   - Xray Service:            $(if ${STATE_XRAY_SERVICE_RUNNING}; then echo -e "${GREEN}[✓ 运行中]${NC}"; else echo -e "${RED}[✗ 已停止]${NC}"; fi)"
     echo -e "   - Cloudflared Service:       $(if ${STATE_CLOUDFLARED_SERVICE_RUNNING}; then echo -e "${GREEN}[✓ 运行中]${NC}"; else echo -e "${RED}[✗ 已停止]${NC}"; fi)"
-    # Now this status check should be accurate due to lsof fix
     echo -e "   - WireProxy Service:       $(if ${STATE_WIREPROXY_SERVICE_RUNNING}; then echo -e "${GREEN}[✓ 运行中]${NC}"; else echo -e "${RED}[✗ 已停止]${NC}"; fi)"
     echo "------------------------------------------------------------"
     echo " [ 主菜单 ]"
@@ -617,11 +684,11 @@ main_menu() {
     echo " 7. [其他] 检查脚本更新"
     echo " 8. [诊断] 实时查看 Xray 日志"
     echo " 9. [诊断] 实时查看 Cloudflared 日志"
-    echo " 10. [更新] 检查并更新 Xray-core"
+    echo "10. [更新] 检查并更新 Xray-core"
     echo ""
     echo " 0. 退出脚本"
     echo ""
-    read -rp "请输入数字 [0-9]: " choice
+    read -rp "请输入数字 [0-10]: " choice
 
     case ${choice} in
         1) manage_xray; pause_for_user; main_menu;;
@@ -629,28 +696,25 @@ main_menu() {
         3) manage_wireproxy; pause_for_user; main_menu;;
         4) display_config_info; pause_for_user; main_menu;;
         5)
-            echo ">>> 正在重启所有服务..."
-            systemctl restart xray 2>/dev/null || true
-            if ! systemctl is-active --quiet xray; then echo -e "${YELLOW}Xray 服务重启失败或未运行。${NC}"; fi
+            log_info "正在重启所有服务..."
+            systemctl restart xray 2>/dev/null || log_warning "Xray 服务重启失败或未运行。"
 
-            systemctl restart cloudflared 2>/dev/null || true
-            if ! systemctl is-active --quiet cloudflared; then echo -e "${YELLOW}Cloudflared 服务重启失败或未运行。${NC}"; fi
+            systemctl restart cloudflared 2>/dev/null || log_warning "Cloudflared 服务重启失败或未运行。"
 
             if ${STATE_WIREPROXY_INSTALLED}; then
                  # Assuming wireproxy.service is the standard systemd unit name for fscarmen's script
-                 systemctl restart wireproxy.service 2>/dev/null || true
-                 if ! systemctl is-active --quiet wireproxy.service; then echo -e "${YELLOW}WireProxy 服务重启失败或未运行。${NC}"; fi
+                 systemctl restart wireproxy.service 2>/dev/null || log_warning "WireProxy 服务重启失败或未运行。"
             fi
-            echo "所有服务已尝试重启。"
+            log_success "所有服务已尝试重启。"
             pause_for_user; main_menu
             ;;
-        6) uninstall_vwaw; main_menu;;
+        6) uninstall_vwaw; pause_for_user; main_menu;;
         7) check_for_updates; pause_for_user; main_menu;;
         8) view_xray_logs; main_menu;;
         9) view_cloudflared_logs; main_menu;;
         10) check_xray_update; pause_for_user; main_menu;;
         0) exit 0;;
-        *) echo -e "${RED}无效输入...${NC}"; sleep 1; main_menu;;
+        *) log_error "无效输入..."; sleep 1; main_menu;;
     esac
 }
 
