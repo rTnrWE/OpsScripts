@@ -74,6 +74,62 @@ load_tunnel_name_from_config() {
 }
 
 
+# --- Xray Update Check Function ---
+check_xray_update() {
+    if ! command -v xray &> /dev/null; then
+        echo "Xray 未安装，无法检查更新。"; return 1;
+    fi
+
+    # Get current Xray version (e.g., "1.8.3")
+    local current_version
+    current_version=$(xray version 2>/dev/null | head -n1 | grep -oP 'Xray\s+v\K[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "unknown")
+
+    if [ "$current_version" = "unknown" ]; then
+        echo "无法获取当前 Xray 版本。"; return 1;
+    fi
+
+    echo "当前 Xray 版本: v${current_version}"
+
+    # Ensure jq is installed for JSON parsing
+    if ! command -v jq &> /dev/null; then
+        apt-get update && apt-get install -y jq
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}错误: jq 安装失败。${NC}"; return 1;
+        fi
+    fi
+
+    # Fetch latest stable release from GitHub API
+    local latest_version
+    latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name // empty' 2>/dev/null | sed 's/v//' || echo "unknown")
+
+    if [ "$latest_version" = "unknown" ] || [ -z "$latest_version" ]; then
+        echo "无法获取最新 Xray 版本。"; return 1;
+    fi
+
+    echo "最新 Xray 版本: v${latest_version}"
+
+    # Compare versions (semantic versioning): if latest > current
+    if [[ $(printf '%s\n' "${current_version}" "${latest_version}" | sort -V | head -n1) == "${current_version}" && "${current_version}" != "${latest_version}" ]]; then
+        echo -e "${YELLOW}检测到新版本可用: v${latest_version}${NC}"
+        read -rp "是否立即更新 Xray-core? [y/N]: " update_choice
+        if [[ "${update_choice}" =~ ^[yY]$ ]]; then
+            echo "正在更新 Xray-core 到 v${latest_version}..."
+            systemctl stop xray 2>/dev/null || true
+            bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}错误: Xray-core 更新失败。${NC}"; return 1;
+            fi
+            systemctl start xray 2>/dev/null || true
+            echo -e "${GREEN}Xray-core 更新成功。${NC}"
+            return 0;
+        else
+            echo "更新已取消。"; return 1;
+        fi
+    else
+        echo "当前版本已是最新。"; return 0;
+    fi
+}
+
 # --- State Check Functions ---
 check_all_states() {
     # Reset states
@@ -126,7 +182,8 @@ manage_xray() {
             echo -e "${RED}错误: Xray-core 安装失败。请检查网络或脚本权限。${NC}"; return 1;
         fi
     else
-        echo "Xray Core 已安装。"
+        echo "Xray Core 已安装，正在检查更新..."
+        check_xray_update
     fi
     if ! command -v jq &> /dev/null; then
         echo ">>> 正在安装依赖 jq 用于格式化JSON..."
@@ -560,6 +617,7 @@ main_menu() {
     echo " 7. [其他] 检查脚本更新"
     echo " 8. [诊断] 实时查看 Xray 日志"
     echo " 9. [诊断] 实时查看 Cloudflared 日志"
+    echo " 10. [更新] 检查并更新 Xray-core"
     echo ""
     echo " 0. 退出脚本"
     echo ""
@@ -590,6 +648,7 @@ main_menu() {
         7) check_for_updates; pause_for_user; main_menu;;
         8) view_xray_logs; main_menu;;
         9) view_cloudflared_logs; main_menu;;
+        10) check_xray_update; pause_for_user; main_menu;;
         0) exit 0;;
         *) echo -e "${RED}无效输入...${NC}"; sleep 1; main_menu;;
     esac
