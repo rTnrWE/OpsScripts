@@ -5,7 +5,7 @@
 # Thanks: sing-box project[](https://github.com/SagerNet/sing-box), fscarmen/warp-sh project[](https://github.com/fscarmen/warp-sh)
 #===============================================================================
 
-SCRIPT_VERSION="2.2.2"
+SCRIPT_VERSION="2.2.5"
 INSTALL_PATH="/root/sbvw.sh"
 
 RED='\033[0;31m'
@@ -831,11 +831,33 @@ main_menu() {
             5)
                 SINGBOX_BINARY=$(command -v sing-box)
                 if [[ -n "$SINGBOX_BINARY" ]]; then
-                    current_version=$($SINGBOX_BINARY version | head -n 1)
+                    # 提取当前版本的纯版本号（去除 "sing-box version " 前缀）
+                    current_version=$($SINGBOX_BINARY version | head -n 1 | sed 's/^sing-box version //')
                     echo ">>> 检测当前 Sing-Box 版本: $current_version"
-                    latest_install_script=$(curl -fsSL https://sing-box.app/deb-install.sh 2>/dev/null)
-                    latest_version=$(echo "$latest_install_script" | grep -oP 'sing-box_version="\K[^"]+')
-                    if [[ -n "$latest_version" && "$current_version" != *"$latest_version"* ]]; then
+                    
+                    # 使用 GitHub API 获取最新版本
+                    latest_raw=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest)
+                    if [[ -z "$latest_raw" ]]; then
+                        warning_msg "无法从 GitHub API 获取最新版本信息，请检查网络连接。"
+                        read -n 1 -s -r -p "按任意键返回主菜单..."
+                        continue
+                    fi
+                    latest_version=$(echo "$latest_raw" | jq -r '.tag_name // empty' | sed 's/^v//')
+                    if [[ -z "$latest_version" ]]; then
+                        warning_msg "无法提取最新版本信息，请手动访问 https://github.com/SagerNet/sing-box/releases 检查。"
+                        read -n 1 -s -r -p "按任意键返回主菜单..."
+                        continue
+                    fi
+                    echo ">>> 检测 GitHub 最新 Sing-Box 版本: $latest_version"
+                    
+                    # 检查是否为 pre-release
+                    is_prerelease=$(echo "$latest_raw" | jq -r '.prerelease // false')
+                    if [[ "$is_prerelease" == "true" ]]; then
+                        warning_msg "注意：最新版本 $latest_version 是预发布版 (beta/alpha)，可能不稳定。"
+                    fi
+                    
+                    # 比较版本（简单字符串比较）
+                    if [[ "$current_version" != "$latest_version" ]]; then
                         echo ">>> 检测到新版本 $latest_version，执行更新..."
                         install_singbox_core
                     else
@@ -850,6 +872,7 @@ main_menu() {
                     echo ">>> 未检测到 Sing-Box 安装，执行首次安装..."
                     install_singbox_core
                 fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             6) 
                 if [[ -f "$CONFIG_PATH" ]]; then 
