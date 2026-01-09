@@ -5,7 +5,7 @@
 # Thanks: sing-box project[](https://github.com/SagerNet/sing-box), fscarmen/warp-sh project[](https://github.com/fscarmen/warp-sh)
 #===============================================================================
 
-SCRIPT_VERSION="2.2.6"
+SCRIPT_VERSION="2.2.7"
 INSTALL_PATH="/root/sbvw.sh"
 
 RED='\033[0;31m'
@@ -87,11 +87,12 @@ check_wireproxy_health() {
     return 0
 }
 
-# ==================== 新增：判断当前出站是否为 WARP socks5 出站 ====================
+# ==================== 判断当前出站是否为 WARP socks5 出站 ====================
 is_current_outbound_warp() {
     if [[ ! -f "$CONFIG_PATH" ]]; then
         return 1
     fi
+
     local t tag server port
     t=$(jq -r '.outbounds[0].type // ""' "$CONFIG_PATH" 2>/dev/null)
     tag=$(jq -r '.outbounds[0].tag // ""' "$CONFIG_PATH" 2>/dev/null)
@@ -110,7 +111,7 @@ is_current_outbound_warp() {
     return 1
 }
 
-# ==================== 新增：判断当前出站是否为 direct ====================
+# ==================== 判断当前出站是否为 direct ====================
 is_current_outbound_direct() {
     if [[ ! -f "$CONFIG_PATH" ]]; then
         return 1
@@ -120,7 +121,77 @@ is_current_outbound_direct() {
     [[ "$t" == "direct" ]]
 }
 
-# ==================== 修复：恢复直连出站逻辑（只针对 WARP，不误伤自定义 socks5） ====================
+# ==================== 卸载/清理 WARP Socks5 出口（WireProxy） ====================
+purge_warp_socks_outbound() {
+    # 直连 / 自定义 Socks5 状态下，必须确保 wireproxy 不存在且不运行
+    if systemctl list-unit-files 2>/dev/null | grep -q '^wireproxy\.service'; then
+        systemctl stop wireproxy >/dev/null 2>&1 || true
+        systemctl disable wireproxy >/dev/null 2>&1 || true
+    fi
+
+    rm -f /etc/systemd/system/wireproxy.service >/dev/null 2>&1 || true
+    rm -f /lib/systemd/system/wireproxy.service >/dev/null 2>&1 || true
+    rm -f /usr/lib/systemd/system/wireproxy.service >/dev/null 2>&1 || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+
+    # 删除 wireproxy 二进制（若存在）
+    if command -v wireproxy >/dev/null 2>&1; then
+        local wp_bin
+        wp_bin=$(command -v wireproxy)
+        rm -f "$wp_bin" >/dev/null 2>&1 || true
+    fi
+
+    # 清理常见目录（存在才删）
+    rm -rf /etc/wireproxy >/dev/null 2>&1 || true
+    rm -rf /opt/wireproxy >/dev/null 2>&1 || true
+    rm -rf /usr/local/etc/wireproxy >/dev/null 2>&1 || true
+
+    log_action "已清理 WARP socks5 出口（wireproxy）"
+}
+
+# ==================== 强制单一状态的 info 文件（直连/自定义 使用 VRV；WARP 使用 VRVW） ====================
+enforce_info_single_state() {
+    local state="$1" # direct | warp | custom_socks5
+    local target=""
+
+    case "$state" in
+        warp)
+            target="$INFO_PATH_VRVW"
+            # 确保只有 VRVW，删除 VRV
+            if [[ -f "$INFO_PATH_VRV" && ! -f "$INFO_PATH_VRVW" ]]; then
+                mv -f "$INFO_PATH_VRV" "$INFO_PATH_VRVW" >/dev/null 2>&1 || true
+            fi
+            rm -f "$INFO_PATH_VRV" >/dev/null 2>&1 || true
+            if [[ -f "$target" ]]; then
+                if grep -q '^OUTBOUND_TYPE=' "$target"; then
+                    sed -i 's/^OUTBOUND_TYPE=.*/OUTBOUND_TYPE=warp/' "$target"
+                else
+                    echo "OUTBOUND_TYPE=warp" >> "$target"
+                fi
+            fi
+            ;;
+        direct|custom_socks5)
+            target="$INFO_PATH_VRV"
+            # 确保只有 VRV，删除 VRVW（如果只有 VRVW 就迁移过来）
+            if [[ -f "$INFO_PATH_VRVW" && ! -f "$INFO_PATH_VRV" ]]; then
+                mv -f "$INFO_PATH_VRVW" "$INFO_PATH_VRV" >/dev/null 2>&1 || true
+            fi
+            rm -f "$INFO_PATH_VRVW" >/dev/null 2>&1 || true
+            if [[ -f "$target" ]]; then
+                if grep -q '^OUTBOUND_TYPE=' "$target"; then
+                    sed -i "s/^OUTBOUND_TYPE=.*/OUTBOUND_TYPE=${state}/" "$target"
+                else
+                    echo "OUTBOUND_TYPE=${state}" >> "$target"
+                fi
+            fi
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+# ==================== 恢复直连出站逻辑（只针对 WARP 不可用时自动回退） ====================
 restore_direct_outbound() {
     if [[ ! -f "$CONFIG_PATH" ]]; then
         warning_msg "配置文件不存在"
@@ -135,7 +206,7 @@ restore_direct_outbound() {
             warning_msg "WireProxy 已停止或不可用，自动恢复为直连出站"
 
             # 备份当前配置
-            cp "$CONFIG_PATH" "${CONFIG_PATH}.warp-backup" 2>/dev/null || true
+            cp "$CONFIG_PATH" "${CONFIG_PATH}.warp-backup" >/dev/null 2>&1 || true
 
             # 更新配置为直连出站
             jq '.outbounds[0] = {
@@ -145,6 +216,10 @@ restore_direct_outbound() {
             }' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
 
             if [[ $? -eq 0 ]]; then
+                # 直连状态下必须清理 wireproxy，并确保 info 文件单一
+                purge_warp_socks_outbound
+                enforce_info_single_state "direct"
+
                 success_msg "配置已恢复为直连出站"
                 systemctl restart sing-box
                 log_action "自动恢复直连出站（WireProxy 不可用）"
@@ -158,9 +233,60 @@ restore_direct_outbound() {
     return 0
 }
 
+# ==================== 新增：手动“恢复出口直连”（强制单一状态） ====================
+manual_restore_direct_outbound() {
+    if [[ ! -f "$CONFIG_PATH" ]]; then
+        error_exit "配置文件不存在，请先安装。"
+    fi
+
+    clear
+    echo "========================================="
+    echo "           恢复出口直连 (direct)"
+    echo "========================================="
+    echo -e "${YELLOW}操作将：卸载/清理 wireproxy（WARP socks5），并覆盖删除自定义 socks5 出口配置。${NC}"
+    echo ""
+
+    # 备份配置
+    cp "$CONFIG_PATH" "${CONFIG_PATH}.restore-direct-backup.$(date +%Y%m%d%H%M%S)" >/dev/null 2>&1 || true
+
+    # 1) 清理 wireproxy（如果装过 WARP）
+    purge_warp_socks_outbound
+
+    # 2) 覆盖 outbounds[0] 为 direct（等价于删除自定义 socks5 配置）
+    jq '.outbounds[0] = {
+        "type": "direct",
+        "tag": "direct",
+        "tcp_fast_open": true
+    }' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" || error_exit "写入直连出站失败。"
+
+    # 3) 强制 info 单一：直连使用 VRV
+    enforce_info_single_state "direct"
+
+    # 4) 重启 sing-box
+    systemctl restart sing-box
+    sleep 2
+    if systemctl is-active --quiet sing-box; then
+        success_msg "✅ 已恢复为直连出站（direct）"
+        log_action "手动恢复出口直连"
+    else
+        warning_msg "已写入直连配置，但 sing-box 重启失败，请查看：journalctl -u sing-box -e --no-pager"
+        log_action "手动恢复直连后 sing-box 重启失败"
+    fi
+
+    echo ""
+    # 输出客户端信息（show_summary 会显示出口状态）
+    if [[ -f "$INFO_PATH_VRV" ]]; then
+        show_summary "$INFO_PATH_VRV"
+    else
+        warning_msg "未找到 $INFO_PATH_VRV，无法展示客户端信息。"
+    fi
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+}
+
 # ==================== TFO 状态检查 ====================
 check_tfo_status() {
-    local tfo_value=$(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo "0")
+    local tfo_value
+    tfo_value=$(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo "0")
     if [[ "$tfo_value" == "3" ]]; then
         success_msg "TCP Fast Open (TFO) 状态: 已开启"
     else
@@ -219,38 +345,6 @@ EOF
     success_msg "WireProxy 已成功安装并运行！"
     log_action "WireProxy 安装完成"
     return 0
-}
-
-# ==================== 新增：卸载/清理 WARP Socks5 出口（WireProxy） ====================
-purge_warp_socks_outbound() {
-    echo ">>> 正在卸载/清理 WARP Socks5 出口（WireProxy）..."
-
-    # stop/disable service（存在则处理）
-    if systemctl list-unit-files 2>/dev/null | grep -q '^wireproxy\.service'; then
-        systemctl stop wireproxy >/dev/null 2>&1 || true
-        systemctl disable wireproxy >/dev/null 2>&1 || true
-    fi
-
-    # 删除常见 unit 文件位置
-    rm -f /etc/systemd/system/wireproxy.service >/dev/null 2>&1 || true
-    rm -f /lib/systemd/system/wireproxy.service >/dev/null 2>&1 || true
-    rm -f /usr/lib/systemd/system/wireproxy.service >/dev/null 2>&1 || true
-    systemctl daemon-reload >/dev/null 2>&1 || true
-
-    # 删除 wireproxy 二进制（若存在）
-    if command -v wireproxy >/dev/null 2>&1; then
-        local wp_bin
-        wp_bin=$(command -v wireproxy)
-        rm -f "$wp_bin" >/dev/null 2>&1 || true
-    fi
-
-    # 清理常见目录（存在才删）
-    rm -rf /etc/wireproxy >/dev/null 2>&1 || true
-    rm -rf /opt/wireproxy >/dev/null 2>&1 || true
-    rm -rf /usr/local/etc/wireproxy >/dev/null 2>&1 || true
-
-    log_action "已卸载/清理 WARP Socks5 出口（wireproxy）"
-    success_msg "WARP Socks5 出口清理完成"
 }
 
 # ==================== Reality 域名检查 ====================
@@ -400,36 +494,35 @@ EOF
     return 0
 }
 
-# ==================== 新增：自定义 Socks5 出口（明文输出，WARP 与此二选一） ====================
+# ==================== 自定义 Socks5 出口（强制单一状态：与 WARP 互斥） ====================
 custom_socks5_outbound() {
     if [[ ! -f "$CONFIG_PATH" ]]; then
-        error_exit "配置文件不存在，请先安装并生成配置。"
+        error_exit "配置文件不存在，请先安装。"
     fi
 
     clear
     echo "========================================="
     echo "          自定义 Socks5 出口"
     echo "========================================="
-    echo -e "${YELLOW}说明：WARP 本质也是 Socks5 出口。本功能用于配置第三方/自定义 Socks5 出口。${NC}"
+    echo -e "${YELLOW}三种出口方式（direct / WARP socks5 / 自定义 socks5）强制互斥。${NC}"
+    echo -e "${YELLOW}配置自定义 Socks5 时，如检测到 WARP 出口将自动卸载/清理 wireproxy。${NC}"
     echo ""
 
     # 如果当前是 WARP 出站，必须先卸载清理 wireproxy
     if is_current_outbound_warp; then
-        warning_msg "检测到当前为 WARP Socks5 出口：将先卸载/清理 WARP（wireproxy），再配置自定义 Socks5。"
+        warning_msg "检测到当前为 WARP Socks5 出口，先清理 WARP 出口（wireproxy）..."
         purge_warp_socks_outbound
         echo ""
     else
         if is_current_outbound_direct; then
-            success_msg "当前出口为 direct：可直接配置自定义 Socks5。"
+            success_msg "当前出口为 direct，可直接配置自定义 Socks5。"
         else
-            warning_msg "当前出口不是 WARP 也不是 direct：将覆盖为自定义 Socks5。"
+            warning_msg "当前出口非 WARP 且非 direct，将覆盖为自定义 Socks5。"
         fi
         echo ""
     fi
 
     local socks_ip socks_port socks_user socks_pass
-
-    # 输入顺序：IP -> Port -> Username -> Password
     read -r -p "请输入 Socks5 IP/域名，回车: " socks_ip
     [[ -z "$socks_ip" ]] && error_exit "IP/域名不能为空。"
 
@@ -443,15 +536,14 @@ custom_socks5_outbound() {
     read -r -p "请输入密码，回车（可空）: " socks_pass
 
     # 备份配置
-    cp "$CONFIG_PATH" "${CONFIG_PATH}.custom-socks5-backup.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    cp "$CONFIG_PATH" "${CONFIG_PATH}.custom-socks5-backup.$(date +%Y%m%d%H%M%S)" >/dev/null 2>&1 || true
 
-    # 写入 outbounds[0] 为自定义 socks5（明文保留 username/password）
+    # 写入自定义 socks5 出站（明文保留账号密码）
     jq --arg server "$socks_ip" \
        --argjson port "$socks_port" \
        --arg user "$socks_user" \
        --arg pass "$socks_pass" \
-       '
-       .outbounds[0] = {
+       '.outbounds[0] = {
             "type":"socks",
             "tag":"custom-socks5-out",
             "server": $server,
@@ -462,21 +554,9 @@ custom_socks5_outbound() {
             "password": $pass
        }' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" || error_exit "写入配置失败。"
 
-    # 更新 info 文件的 OUTBOUND_TYPE 标记（保持你原有设计）
-    local info_file=""
-    if [[ -f "$INFO_PATH_VRV" ]]; then
-        info_file="$INFO_PATH_VRV"
-    elif [[ -f "$INFO_PATH_VRVW" ]]; then
-        # 即使之前是 WARP info，也允许继续用（但出口已改为自定义 socks5）
-        info_file="$INFO_PATH_VRVW"
-    fi
-    if [[ -n "$info_file" ]]; then
-        if grep -q '^OUTBOUND_TYPE=' "$info_file"; then
-            sed -i "s/^OUTBOUND_TYPE=.*/OUTBOUND_TYPE=custom_socks5/" "$info_file"
-        else
-            echo "OUTBOUND_TYPE=custom_socks5" >> "$info_file"
-        fi
-    fi
+    # 自定义 socks5 状态下：必须确保 wireproxy 不存在，并确保 info 文件单一（使用 VRV）
+    purge_warp_socks_outbound
+    enforce_info_single_state "custom_socks5"
 
     systemctl restart sing-box
     sleep 2
@@ -489,7 +569,7 @@ custom_socks5_outbound() {
     fi
 
     echo ""
-    # 输出客户端信息（含出口明细）
+    # 输出客户端信息（含出站明细）
     if [[ -f "$INFO_PATH_VRV" ]]; then
         show_summary "$INFO_PATH_VRV"
     elif [[ -f "$INFO_PATH_VRVW" ]]; then
@@ -510,7 +590,7 @@ custom_socks5_outbound() {
     read -n 1 -s -r -p "按任意键返回主菜单..."
 }
 
-# ==================== 查看配置信息（增强：socks 出口明文展示） ====================
+# ==================== 查看配置信息 ====================
 show_summary() {
     local info_file="$1"
     if [[ ! -f "$info_file" ]]; then
@@ -521,9 +601,10 @@ show_summary() {
     source "$info_file"
 
     # 获取服务器 IP
-    local server_ip=$(hostname -I | awk '{print $1}')
+    local server_ip
+    server_ip=$(hostname -I | awk '{print $1}')
 
-    # 从配置文件读取实际的出站类型
+    # 从配置文件读取实际的出站信息
     local outbound_info="unknown"
     local outbound_tag=""
     local outbound_server=""
@@ -531,7 +612,7 @@ show_summary() {
     local outbound_user=""
     local outbound_pass=""
     if [[ -f "$CONFIG_PATH" ]]; then
-        outbound_info=$(jq -r '.outbounds[0].type' "$CONFIG_PATH" 2>/dev/null || echo "unknown")
+        outbound_info=$(jq -r '.outbounds[0].type // "unknown"' "$CONFIG_PATH" 2>/dev/null || echo "unknown")
         outbound_tag=$(jq -r '.outbounds[0].tag // ""' "$CONFIG_PATH" 2>/dev/null || echo "")
         outbound_server=$(jq -r '.outbounds[0].server // ""' "$CONFIG_PATH" 2>/dev/null || echo "")
         outbound_port=$(jq -r '.outbounds[0].server_port // ""' "$CONFIG_PATH" 2>/dev/null || echo "")
@@ -631,7 +712,8 @@ check_and_toggle_log_status() {
         error_exit "配置文件不存在。"
     fi
 
-    local log_status=$(jq -r '.log.disabled' "$CONFIG_PATH" 2>/dev/null)
+    local log_status
+    log_status=$(jq -r '.log.disabled' "$CONFIG_PATH" 2>/dev/null)
     local new_status="true"
     local status_text="关闭"
 
@@ -657,7 +739,8 @@ view_log() {
 
 auto_disable_log_on_start() {
     if [[ -f "$CONFIG_PATH" ]]; then
-        local log_status=$(jq -r '.log.disabled' "$CONFIG_PATH" 2>/dev/null)
+        local log_status
+        log_status=$(jq -r '.log.disabled' "$CONFIG_PATH" 2>/dev/null)
         if [[ "$log_status" != "true" ]]; then
             jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
             systemctl restart sing-box >/dev/null 2>&1
@@ -674,6 +757,10 @@ install_standard() {
 
     check_tfo_status
 
+    # 直连状态：强制互斥，清理 WARP socks5（wireproxy）并清理 VRVW info
+    purge_warp_socks_outbound
+    rm -f "$INFO_PATH_VRVW" >/dev/null 2>&1 || true
+
     if ! install_singbox_core; then
         error_exit "Sing-Box 核心安装失败。"
     fi
@@ -681,6 +768,9 @@ install_standard() {
     if ! generate_config "direct"; then
         error_exit "配置生成失败。"
     fi
+
+    # 生成后再次保证 info 单一
+    enforce_info_single_state "direct"
 
     systemctl enable sing-box
     systemctl restart sing-box
@@ -716,6 +806,9 @@ install_with_warp() {
         error_exit "配置生成失败。"
     fi
 
+    # WARP 状态：强制互斥，只保留 VRVW info
+    enforce_info_single_state "warp"
+
     systemctl enable sing-box
     systemctl restart sing-box
     sleep 2
@@ -736,8 +829,8 @@ upgrade_to_warp() {
     echo "    升级至 WARP 版本"
     echo "========================================="
 
-    if [[ ! -f "$INFO_PATH_VRV" ]]; then
-        error_exit "未检测到标准版配置。"
+    if [[ ! -f "$INFO_PATH_VRV" && ! -f "$INFO_PATH_VRVW" ]]; then
+        error_exit "未检测到已有配置，请先安装标准版或 WARP 版。"
     fi
 
     if ! install_warp; then
@@ -745,9 +838,6 @@ upgrade_to_warp() {
     fi
 
     echo "正在升级配置文件..."
-
-    # 获取现有的 inbound 配置
-    local inbound_config=$(jq '.inbounds[0]' "$CONFIG_PATH")
 
     # 创建 WARP 出站配置
     local warp_outbound='{
@@ -761,9 +851,8 @@ upgrade_to_warp() {
       "password": ""
     }'
 
-    # 更新配置
+    # 更新出站
     jq --argjson new_outbound "$warp_outbound" '.outbounds = [$new_outbound]' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-
     if [[ $? -ne 0 ]]; then
         error_exit "配置文件升级失败！"
     fi
@@ -774,11 +863,8 @@ upgrade_to_warp() {
     systemctl restart sing-box
     sleep 2
 
-    if [[ -f "$INFO_PATH_VRV" ]]; then
-        mv "$INFO_PATH_VRV" "$INFO_PATH_VRVW"
-        # 添加出站类型标记
-        echo "OUTBOUND_TYPE=warp" >> "$INFO_PATH_VRVW"
-    fi
+    # 强制单一状态：只保留 VRVW info
+    enforce_info_single_state "warp"
 
     if systemctl is-active --quiet sing-box; then
         success_msg "✅ 升级成功，已切换到 WARP 出站"
@@ -798,7 +884,8 @@ update_script() {
         return 1
     fi
 
-    local new_version=$(grep 'SCRIPT_VERSION="' "$temp_script_path" | awk -F '"' '{print $2}')
+    local new_version
+    new_version=$(grep 'SCRIPT_VERSION="' "$temp_script_path" | awk -F '"' '{print $2}')
     if [[ -z "$new_version" ]]; then
         error_exit "未检测到新脚本版本号。"
     fi
@@ -905,7 +992,8 @@ uninstall_vrvw() {
 
     systemctl stop sing-box &>/dev/null
     systemctl disable sing-box &>/dev/null
-    local bin_path=$(command -v sing-box)
+    local bin_path
+    bin_path=$(command -v sing-box)
 
     if [[ "$keep_config" == false ]]; then
         echo "正在删除 sing-box 文件 (包括配置文件)..."
@@ -987,6 +1075,7 @@ main_menu() {
         echo " 10. 检查并修复出站状态"
         echo " 11. 彻底卸载"
         echo " 12. 自定义Socks5出口"
+        echo " 13. 恢复出口直连"
         echo " 0. 退出脚本"
         echo "======================================================"
         read -p "请输入你的选项: " choice
@@ -1022,11 +1111,8 @@ main_menu() {
             5)
                 SINGBOX_BINARY=$(command -v sing-box)
                 if [[ -n "$SINGBOX_BINARY" ]]; then
-                    # 提取当前版本的纯版本号（去除 "sing-box version " 前缀）
                     current_version=$($SINGBOX_BINARY version | head -n 1 | sed 's/^sing-box version //')
                     echo ">>> 检测当前 Sing-Box 版本: $current_version"
-
-                    # 使用 GitHub API 获取最新版本
                     latest_raw=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest)
                     if [[ -z "$latest_raw" ]]; then
                         warning_msg "无法从 GitHub API 获取最新版本信息，请检查网络连接。"
@@ -1040,14 +1126,10 @@ main_menu() {
                         continue
                     fi
                     echo ">>> 检测 GitHub 最新 Sing-Box 版本: $latest_version"
-
-                    # 检查是否为 pre-release
                     is_prerelease=$(echo "$latest_raw" | jq -r '.prerelease // false')
                     if [[ "$is_prerelease" == "true" ]]; then
                         warning_msg "注意：最新版本 $latest_version 是预发布版 (beta/alpha)，可能不稳定。"
                     fi
-
-                    # 比较版本（简单字符串比较）
                     if [[ "$current_version" != "$latest_version" ]]; then
                         echo ">>> 检测到新版本 $latest_version，执行更新..."
                         install_singbox_core
@@ -1091,7 +1173,6 @@ main_menu() {
                 echo "正在检查并修复出站状态..."
                 restore_direct_outbound
                 sleep 1
-                # 检查修复后显示配置信息
                 if [[ -f "$INFO_PATH_VRV" ]]; then
                     show_summary "$INFO_PATH_VRV"
                 elif [[ -f "$INFO_PATH_VRVW" ]]; then
@@ -1105,6 +1186,9 @@ main_menu() {
                 ;;
             12)
                 custom_socks5_outbound
+                ;;
+            13)
+                manual_restore_direct_outbound
                 ;;
             0)
                 exit 0
