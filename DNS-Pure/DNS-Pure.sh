@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# DNS-Pure v2.8 (Hardened + IPv6-aware)
-# One-command, simple, resilient DNS "purify + harden" using systemd-resolved.
-# - Default hardening: LLMNR=no, MulticastDNS=no  (attack surface reduction)
-# - IPv6-aware: if IPv6 is present, automatically add IPv6 DoT resolvers & harden DHCPv6 overrides
-# - Resilient: networking restart is BEST-EFFORT and never blocks DNS success
-
+# DNS-Pure v2.9 (Hardened + IPv6-aware + Auto-install systemd-resolved)
+#
 # Usage:
-# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
+#
+# Goals:
+# - One-command, simple, resilient DNS "purify + harden" using systemd-resolved
+# - Default attack-surface reduction: LLMNR=no, MulticastDNS=no
+# - IPv6-aware: if IPv6 is present, also configure IPv6 DoT resolvers & fallback
+# - Auto-heal: if systemd-resolved isn't present, install + enable it automatically (Debian/Ubuntu apt-based)
+# - Resilient: networking refresh is BEST-EFFORT and never blocks DNS success
 
 set -euo pipefail
 
-VERSION="2.8"
+VERSION="2.9"
 
 # =========================
 # Logging helpers
@@ -64,8 +67,6 @@ write_file_atomic() {
 # IPv6 detection
 # =========================
 has_ipv6() {
-  # Consider IPv6 "present" if we have a global IPv6 address OR a default route.
-  # (Some VPS have address but no route temporarily; either way, adding v6 resolvers is harmless.)
   ip -6 addr show scope global 2>/dev/null | grep -q "inet6" && return 0
   ip -6 route show default 2>/dev/null | grep -q . && return 0
   return 1
@@ -74,58 +75,87 @@ has_ipv6() {
 # =========================
 # User-tunable knobs (optional)
 # =========================
-# Networking apply policy: default SAFE (no hard restart).
-# Set to 1 only if you insist:
-#   APPLY_NETWORK_REFRESH=1 curl ... | bash
+# Default SAFE: do NOT restart networking.service on remote VPS.
+# Enable only if you insist:
+#   APPLY_NETWORK_REFRESH=1 curl ... | sudo bash
 APPLY_NETWORK_REFRESH="${APPLY_NETWORK_REFRESH:-0}"
 
 # If you want the script to install ifupdown2 when missing (to use ifreload -a), set:
 #   INSTALL_IFUPDOWN2=1
 INSTALL_IFUPDOWN2="${INSTALL_IFUPDOWN2:-0}"
 
+# Auto-install resolved if missing (recommended for Debian/Ubuntu)
+AUTO_INSTALL_RESOLVED="${AUTO_INSTALL_RESOLVED:-1}"
+
 # systemd-resolved knobs (hardened defaults)
 DNS_OVER_TLS="${DNS_OVER_TLS:-yes}"              # yes | opportunistic | no
 DNSSEC_MODE="${DNSSEC_MODE:-yes}"                # yes | allow-downgrade | no
 CACHE_MODE="${CACHE_MODE:-yes}"                  # yes | no
 DNS_STUB_LISTENER="${DNS_STUB_LISTENER:-yes}"    # yes | no
-LLMNR_MODE="${LLMNR_MODE:-no}"                   # Hardened default: no
-MDNS_MODE="${MDNS_MODE:-no}"                     # systemd-resolved uses MulticastDNS=
-READ_ETC_HOSTS="${READ_ETC_HOSTS:-yes}"          # keep /etc/hosts
 
-# Default resolvers (DoT-capable)
-# If the user exports DNS_SERVERS / FALLBACK_DNS, we will not override them.
+# Attack surface reduction defaults for public VPS
+LLMNR_MODE="${LLMNR_MODE:-no}"
+MDNS_MODE="${MDNS_MODE:-no}"                     # systemd-resolved key: MulticastDNS=
+READ_ETC_HOSTS="${READ_ETC_HOSTS:-yes}"
+
+# Default DoT-capable resolvers (IPv4/IPv6)
 DEFAULT_DNS_V4="1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com 8.8.8.8#dns.google 8.8.4.4#dns.google"
 DEFAULT_DNS_V6="2606:4700:4700::1111#cloudflare-dns.com 2606:4700:4700::1001#cloudflare-dns.com 2001:4860:4860::8888#dns.google 2001:4860:4860::8844#dns.google"
 
 DEFAULT_FALLBACK_V4="9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net"
 DEFAULT_FALLBACK_V6="2620:fe::fe#dns.quad9.net 2620:fe::9#dns.quad9.net"
 
-# Respect user overrides if present; otherwise auto-build (IPv6-aware)
+# Allow user override via env, else auto-build (IPv6-aware)
 DNS_SERVERS="${DNS_SERVERS:-}"
 FALLBACK_DNS="${FALLBACK_DNS:-}"
+
+# =========================
+# Auto-install systemd-resolved (Debian/Ubuntu apt-based)
+# =========================
+ensure_systemd_resolved() {
+  if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-resolved\.service'; then
+    return 0
+  fi
+
+  if [[ "${AUTO_INSTALL_RESOLVED}" != "1" ]]; then
+    return 1
+  fi
+
+  if ! cmd_exists apt-get; then
+    return 1
+  fi
+
+  log_warn "未检测到 systemd-resolved.service，正在自动安装 systemd-resolved..."
+  # Best effort, but if install fails, we should fail (script core depends on it).
+  apt-get update -y
+  apt-get install -y systemd-resolved
+
+  # Re-check
+  systemctl list-unit-files 2>/dev/null | grep -q '^systemd-resolved\.service'
+}
 
 # =========================
 # Main
 # =========================
 need_root
 
-log "--- DNS-Pure v${VERSION} (Hardened + IPv6-aware) ---"
+log "--- DNS-Pure v${VERSION} (Hardened + IPv6-aware + Auto-install) ---"
 log "--- 开始执行全面系统DNS健康检查 ---"
 
-# Core dependency check
 if ! cmd_exists systemctl; then
   log_err "未发现 systemctl（该脚本依赖 systemd / systemd-resolved）。"
   exit 1
 fi
 
-if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-resolved\.service'; then
-  log_ok "检测到 systemd-resolved.service"
-else
-  log_err "未检测到 systemd-resolved.service（你的系统可能没有 systemd-resolved）。"
+if ! ensure_systemd_resolved; then
+  log_err "未检测到 systemd-resolved.service，且无法自动安装（或已关闭自动安装）。"
+  log_err "你可以手动安装：apt-get update && apt-get install -y systemd-resolved"
   exit 1
 fi
 
-# IPv6 presence
+log_ok "检测到 systemd-resolved.service"
+
+# IPv6 presence detection
 HAS_IPV6=0
 if has_ipv6; then
   HAS_IPV6=1
@@ -134,24 +164,17 @@ else
   log "未检测到有效 IPv6（仅对 IPv4 执行解析器配置；仍会硬化系统设置）。"
 fi
 
-# Build default DNS lists if not overridden
+# Build DNS lists if not overridden
 if [[ -z "${DNS_SERVERS}" ]]; then
-  if [[ "${HAS_IPV6}" == "1" ]]; then
-    DNS_SERVERS="${DEFAULT_DNS_V4} ${DEFAULT_DNS_V6}"
-  else
-    DNS_SERVERS="${DEFAULT_DNS_V4}"
-  fi
+  DNS_SERVERS="${DEFAULT_DNS_V4}"
+  [[ "${HAS_IPV6}" == "1" ]] && DNS_SERVERS="${DNS_SERVERS} ${DEFAULT_DNS_V6}"
 fi
-
 if [[ -z "${FALLBACK_DNS}" ]]; then
-  if [[ "${HAS_IPV6}" == "1" ]]; then
-    FALLBACK_DNS="${DEFAULT_FALLBACK_V4} ${DEFAULT_FALLBACK_V6}"
-  else
-    FALLBACK_DNS="${DEFAULT_FALLBACK_V4}"
-  fi
+  FALLBACK_DNS="${DEFAULT_FALLBACK_V4}"
+  [[ "${HAS_IPV6}" == "1" ]] && FALLBACK_DNS="${FALLBACK_DNS} ${DEFAULT_FALLBACK_V6}"
 fi
 
-# Show current resolv.conf mode (non-fatal)
+# Show current resolv.conf state (non-fatal)
 if [[ -L /etc/resolv.conf ]]; then
   log_ok "/etc/resolv.conf 当前为软链接：$(readlink -f /etc/resolv.conf)"
 else
@@ -168,7 +191,7 @@ backup_file /etc/resolv.conf
 backup_file /etc/dhcp/dhclient.conf
 backup_file /etc/dhcp/dhclient6.conf
 
-# 1) dhclient (IPv4): prevent overwriting resolv.conf (best-effort)
+# DHCPv4: prevent overwriting DNS (best-effort)
 if [[ -f /etc/dhcp/dhclient.conf ]]; then
   if grep -qE '^\s*supersede\s+domain-name-servers' /etc/dhcp/dhclient.conf; then
     soft_run "净化 dhclient.conf（更新 supersede domain-name-servers）" \
@@ -182,8 +205,7 @@ else
   log "未发现 /etc/dhcp/dhclient.conf，跳过 DHCPv4 净化。"
 fi
 
-# 2) dhclient6 (IPv6): prevent overwriting resolv.conf via DHCPv6 (best-effort, only if file exists)
-# Note: Some setups use dhclient for v6; others use systemd-networkd/NetworkManager (not here), or no DHCPv6 at all.
+# DHCPv6: best-effort (only if dhclient6.conf exists)
 if [[ "${HAS_IPV6}" == "1" && -f /etc/dhcp/dhclient6.conf ]]; then
   if grep -qE '^\s*supersede\s+domain-name-servers' /etc/dhcp/dhclient6.conf; then
     soft_run "净化 dhclient6.conf（更新 supersede domain-name-servers）" \
@@ -197,7 +219,7 @@ else
   [[ "${HAS_IPV6}" == "1" ]] && log "未发现 /etc/dhcp/dhclient6.conf（或不使用 dhclient6），跳过 DHCPv6 净化。"
 fi
 
-# 3) if-up.d hooks that overwrite resolv.conf (best-effort)
+# Disable common if-up.d resolver override scripts (best-effort)
 if [[ -d /etc/network/if-up.d ]]; then
   shopt -s nullglob
   for s in /etc/network/if-up.d/*; do
@@ -212,7 +234,7 @@ else
   log "未发现 /etc/network/if-up.d，跳过。"
 fi
 
-# 4) resolvconf service (if exists) – mask to avoid fights (best-effort)
+# resolvconf service – mask to avoid fights (best-effort)
 if systemctl list-unit-files 2>/dev/null | grep -qE '^resolvconf\.service'; then
   soft_run "停止 resolvconf.service" systemctl stop resolvconf.service
   soft_run "禁用 resolvconf.service" systemctl disable resolvconf.service
@@ -225,7 +247,7 @@ fi
 log ""
 log "--> 阶段二：正在配置 systemd-resolved（IPv4/IPv6 同步加固）..."
 
-# Ensure enabled & running
+# Ensure enabled & running (best-effort enable; start should succeed)
 systemctl enable systemd-resolved.service >/dev/null 2>&1 || true
 systemctl start systemd-resolved.service >/dev/null 2>&1 || true
 log_ok "已启用并启动 systemd-resolved"
@@ -253,20 +275,13 @@ EOF
 write_file_atomic /etc/systemd/resolved.conf "$RESOLVED_CONF_CONTENT"
 log_ok "已写入 /etc/systemd/resolved.conf（DoT/DNSSEC + 关闭 LLMNR/mDNS + IPv6 支持）"
 
-# Force /etc/resolv.conf to point to resolved stub (safe & standard)
+# Force /etc/resolv.conf -> resolved stub (only if stub listener enabled)
 STUB="/run/systemd/resolve/stub-resolv.conf"
 if [[ "${DNS_STUB_LISTENER}" == "yes" ]]; then
+  # Make sure resolved generated stub (restart later will help too)
   if [[ -e "$STUB" ]]; then
-    if [[ -L /etc/resolv.conf ]]; then
-      cur="$(readlink -f /etc/resolv.conf || true)"
-      if [[ "$cur" != "$STUB" ]]; then
-        rm -f /etc/resolv.conf
-        ln -s "$STUB" /etc/resolv.conf
-      fi
-    else
-      rm -f /etc/resolv.conf
-      ln -s "$STUB" /etc/resolv.conf
-    fi
+    rm -f /etc/resolv.conf
+    ln -s "$STUB" /etc/resolv.conf
     log_ok "/etc/resolv.conf 已指向 systemd-resolved stub"
   else
     log_warn "未找到 $STUB（稍后重启 resolved 后可能生成）。继续执行。"
@@ -306,6 +321,7 @@ if [[ "${INSTALL_IFUPDOWN2}" == "1" ]] && ! cmd_exists ifreload; then
   fi
 fi
 
+# Network refresh is optional and BEST-EFFORT
 if [[ "${APPLY_NETWORK_REFRESH}" == "1" ]]; then
   log_warn "已启用网络刷新（APPLY_NETWORK_REFRESH=1）。将尽力刷新网络，但失败不会中断脚本。"
   if cmd_exists ifreload; then
@@ -329,6 +345,6 @@ log "resolvectl 状态摘要："
 resolvectl status || true
 
 log ""
-log_ok "DNS-Pure v${VERSION} 执行完成（DNS 净化 + 加固 + IPv6 支持 已完成）。"
+log_ok "DNS-Pure v${VERSION} 执行完成（DNS 净化 + 加固 + IPv6 支持 + 自动安装 resolved 已完成）。"
 log "提示：如你确实需要刷新 ifupdown 网络，可这样运行："
-log "  APPLY_NETWORK_REFRESH=1 curl -sSL <URL> | bash"
+log "  APPLY_NETWORK_REFRESH=1 curl -sSL <URL> | sudo bash"
