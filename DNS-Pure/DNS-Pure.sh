@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DNS-Pure v2.9 (Hardened + IPv6-aware + Auto-install systemd-resolved)
+# DNS-Pure v2.9.1 (Hardened + IPv6-aware + Auto-install systemd-resolved, truly one-command)
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="2.9"
+VERSION="2.9.1"
 
 # =========================
 # Logging helpers
@@ -110,28 +110,51 @@ DNS_SERVERS="${DNS_SERVERS:-}"
 FALLBACK_DNS="${FALLBACK_DNS:-}"
 
 # =========================
-# Auto-install systemd-resolved (Debian/Ubuntu apt-based)
+# Reliable checks for systemd-resolved
 # =========================
+resolved_unit_known() {
+  # More reliable than list-unit-files alone
+  systemctl cat systemd-resolved.service >/dev/null 2>&1 && return 0
+  systemctl status systemd-resolved.service >/dev/null 2>&1 && return 0
+  return 1
+}
+
+resolved_pkg_installed() {
+  # Debian/Ubuntu dpkg-based check
+  cmd_exists dpkg-query || return 1
+  dpkg-query -W -f='${Status}\n' systemd-resolved 2>/dev/null | grep -q "install ok installed"
+}
+
 ensure_systemd_resolved() {
-  if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-resolved\.service'; then
+  # If unit already known, great.
+  if resolved_unit_known; then
     return 0
   fi
 
+  # If package installed but unit not visible yet, reload daemon then re-check.
+  if resolved_pkg_installed; then
+    soft_run "systemd daemon-reload" systemctl daemon-reload
+    resolved_unit_known && return 0
+  fi
+
+  # Auto-install path
   if [[ "${AUTO_INSTALL_RESOLVED}" != "1" ]]; then
     return 1
   fi
-
   if ! cmd_exists apt-get; then
     return 1
   fi
 
   log_warn "未检测到 systemd-resolved.service，正在自动安装 systemd-resolved..."
-  # Best effort, but if install fails, we should fail (script core depends on it).
   apt-get update -y
   apt-get install -y systemd-resolved
 
-  # Re-check
-  systemctl list-unit-files 2>/dev/null | grep -q '^systemd-resolved\.service'
+  # Critical: refresh unit cache, then enable+start
+  systemctl daemon-reload || true
+  systemctl enable --now systemd-resolved.service >/dev/null 2>&1 || true
+
+  # Final check
+  resolved_unit_known
 }
 
 # =========================
@@ -153,7 +176,14 @@ if ! ensure_systemd_resolved; then
   exit 1
 fi
 
-log_ok "检测到 systemd-resolved.service"
+# Ensure active
+soft_run "启用并启动 systemd-resolved" systemctl enable --now systemd-resolved.service
+if ! systemctl is-active --quiet systemd-resolved.service; then
+  log_err "systemd-resolved 未处于 active 状态。"
+  systemctl --no-pager --full status systemd-resolved.service || true
+  exit 1
+fi
+log_ok "systemd-resolved 已就绪"
 
 # IPv6 presence detection
 HAS_IPV6=0
@@ -247,11 +277,6 @@ fi
 log ""
 log "--> 阶段二：正在配置 systemd-resolved（IPv4/IPv6 同步加固）..."
 
-# Ensure enabled & running (best-effort enable; start should succeed)
-systemctl enable systemd-resolved.service >/dev/null 2>&1 || true
-systemctl start systemd-resolved.service >/dev/null 2>&1 || true
-log_ok "已启用并启动 systemd-resolved"
-
 # Write resolved.conf (explicit + hardened)
 RESOLVED_CONF_CONTENT=$(
 cat <<EOF
@@ -268,42 +293,41 @@ DNSStubListener=${DNS_STUB_LISTENER}
 LLMNR=${LLMNR_MODE}
 MulticastDNS=${MDNS_MODE}
 
-# Keep local hosts file honored
 ReadEtcHosts=${READ_ETC_HOSTS}
 EOF
 )
 write_file_atomic /etc/systemd/resolved.conf "$RESOLVED_CONF_CONTENT"
 log_ok "已写入 /etc/systemd/resolved.conf（DoT/DNSSEC + 关闭 LLMNR/mDNS + IPv6 支持）"
 
-# Force /etc/resolv.conf -> resolved stub (only if stub listener enabled)
+# Ensure /etc/resolv.conf -> resolved stub (only if stub listener enabled)
 STUB="/run/systemd/resolve/stub-resolv.conf"
 if [[ "${DNS_STUB_LISTENER}" == "yes" ]]; then
-  # Make sure resolved generated stub (restart later will help too)
+  # restart resolved first to ensure stub exists
+  log "正在重启 systemd-resolved 以应用配置..."
+  if ! systemctl restart systemd-resolved.service; then
+    log_err "systemd-resolved 重启失败（DNS 可能无法生效）。"
+    systemctl --no-pager --full status systemd-resolved.service || true
+    exit 1
+  fi
+  log_ok "systemd-resolved 已重启"
+
   if [[ -e "$STUB" ]]; then
     rm -f /etc/resolv.conf
     ln -s "$STUB" /etc/resolv.conf
     log_ok "/etc/resolv.conf 已指向 systemd-resolved stub"
   else
-    log_warn "未找到 $STUB（稍后重启 resolved 后可能生成）。继续执行。"
+    log_warn "未找到 $STUB（异常：resolved 已运行但 stub 未生成）。继续执行并输出诊断。"
   fi
 else
   log_warn "DNSStubListener=no：脚本不会强制 /etc/resolv.conf 指向 stub。"
-fi
-
-# Restart resolved (must succeed)
-log "正在重启 systemd-resolved 以应用配置..."
-if ! systemctl restart systemd-resolved.service; then
-  log_err "systemd-resolved 重启失败（DNS 可能无法生效）。"
-  systemctl --no-pager --full status systemd-resolved.service || true
-  exit 1
-fi
-log_ok "systemd-resolved 已重启"
-
-# Retry stub link once more (best-effort)
-if [[ "${DNS_STUB_LISTENER}" == "yes" && -e "$STUB" ]]; then
-  if [[ ! -L /etc/resolv.conf || "$(readlink -f /etc/resolv.conf || true)" != "$STUB" ]]; then
-    soft_run "修复 /etc/resolv.conf -> stub-resolv.conf" bash -c "rm -f /etc/resolv.conf && ln -s '$STUB' /etc/resolv.conf"
-  fi
+  # still restart to apply config
+  log "正在重启 systemd-resolved 以应用配置..."
+  systemctl restart systemd-resolved.service || {
+    log_err "systemd-resolved 重启失败。"
+    systemctl --no-pager --full status systemd-resolved.service || true
+    exit 1
+  }
+  log_ok "systemd-resolved 已重启"
 fi
 
 # Flush caches (best-effort)
