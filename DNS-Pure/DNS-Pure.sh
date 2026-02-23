@@ -5,6 +5,9 @@
 # - IPv6-aware: if IPv6 is present, automatically add IPv6 DoT resolvers & harden DHCPv6 overrides
 # - Resilient: networking restart is BEST-EFFORT and never blocks DNS success
 
+# Usage:
+# curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh | sudo bash
+
 set -euo pipefail
 
 VERSION="2.8"
