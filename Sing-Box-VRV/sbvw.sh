@@ -34,6 +34,11 @@ log_action() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $action" >> /var/log/sbvw.log
 }
 
+# ==================== systemd unit reload（安全调用） ====================
+daemon_reload_safe() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
 # ==================== 权限检查 ====================
 check_root() {
   if [[ "$EUID" -ne 0 ]]; then
@@ -94,6 +99,7 @@ restore_direct_outbound() {
         || error_exit "配置更新失败"
 
       success_msg "配置已恢复为直连出站"
+      daemon_reload_safe
       systemctl restart sing-box
       log_action "自动恢复直连出站（WireProxy 不可用）"
     fi
@@ -122,6 +128,9 @@ install_singbox_core() {
 
   SINGBOX_BINARY=$(command -v sing-box)
   [[ -n "$SINGBOX_BINARY" ]] || error_exit "未能找到 sing-box 可执行文件。"
+
+  # 可能会更新/写入 unit 文件：顺手 reload
+  daemon_reload_safe
 
   success_msg "sing-box 核心安装成功！版本：$($SINGBOX_BINARY version | head -n 1)"
   log_action "Sing-Box 核心安装/更新完成"
@@ -219,10 +228,8 @@ generate_config() {
 
   local listen_addr="::"
   local listen_port=443
-  local co_exist_mode=false
 
   if ss -tlpn 2>/dev/null | grep -q ":${listen_port} "; then
-    co_exist_mode=true
     listen_addr="127.0.0.1"
     warning_msg "检测到 443 端口已被占用，将切换到'网站共存'模式。"
     read -p "请输入 sing-box 用于内部监听的端口 [默认 10443]: " custom_port
@@ -270,7 +277,7 @@ generate_config() {
     LAST_OUTBOUND_TYPE="direct"
   fi
 
-  # 初装仍保持脚本默认：禁用日志（与 2.2.5 行为一致）
+  # 初装保持原行为：禁用日志
   jq -n \
     --arg listen_addr "$listen_addr" \
     --argjson listen_port "$listen_port" \
@@ -355,6 +362,7 @@ change_reality_domain() {
     sed -i "s/^HANDSHAKE_SERVER=.*/HANDSHAKE_SERVER=${new_domain}/" "$info_file" 2>/dev/null || true
   fi
 
+  daemon_reload_safe
   systemctl restart sing-box
   if systemctl is-active --quiet sing-box; then
     success_msg "Reality 域名已更改为: $new_domain"
@@ -364,7 +372,7 @@ change_reality_domain() {
   fi
 }
 
-# ==================== 新功能：重新生成新配置（Reality 域名不变，且不动原 log 配置） ====================
+# ==================== 新功能：重新生成新配置（Reality 域名不变） ====================
 regenerate_config_keep_domain() {
   [[ -f "$CONFIG_PATH" ]] || error_exit "配置文件不存在：$CONFIG_PATH，请先安装。"
 
@@ -378,7 +386,7 @@ regenerate_config_keep_domain() {
   listen_addr=$(jq -r '.inbounds[0].listen // "::"' "$CONFIG_PATH" 2>/dev/null)
   listen_port=$(jq -r '.inbounds[0].listen_port // 443' "$CONFIG_PATH" 2>/dev/null)
 
-  # 保留原 log 配置（关键点：不要动）
+  # 保留原 log 配置（实现层面：不改 log）
   local old_log_json
   old_log_json=$(jq -c '.log // {}' "$CONFIG_PATH" 2>/dev/null)
   [[ -n "$old_log_json" && "$old_log_json" != "null" ]] || old_log_json='{}'
@@ -409,7 +417,7 @@ regenerate_config_keep_domain() {
   [[ "${confirm,,}" == "y" ]] || { echo "已取消。"; return 0; }
 
   if ! check_reality_domain "$handshake_server"; then
-    warning_msg "Reality 域名检测未通过（但仍会继续重建配置，域名保持不变）。"
+    warning_msg "Reality 域名检测未通过（仍会继续重建配置，域名保持不变）。"
   fi
 
   echo ">>> 正在生成新的 Reality keypair / UUID / short_id ..."
@@ -472,11 +480,12 @@ PUBLIC_KEY=${public_key}
 SHORT_ID=${short_id}
 EOF
 
+  daemon_reload_safe
   systemctl restart sing-box
   sleep 1
   systemctl is-active --quiet sing-box || error_exit "sing-box 重启失败，请检查：journalctl -u sing-box -n 100 --no-pager"
 
-  success_msg "✅ 已重新生成新配置（Reality 域名保持不变 / 保留原 log）"
+  success_msg "✅ 已重新生成新配置"
   log_action "重新生成新配置（Reality 域名不变）"
 
   show_summary "$info_file_path"
@@ -501,6 +510,7 @@ check_and_toggle_log_status() {
     && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" \
     || error_exit "更新日志配置失败"
 
+  daemon_reload_safe
   systemctl restart sing-box
   success_msg "日志已${status_text}"
   log_action "日志状态已切换"
@@ -515,12 +525,13 @@ view_log() {
 }
 
 auto_disable_log_on_start() {
-  # 保持原脚本行为：启动时如果日志开启，则自动关掉（不改你新增功能的“重生成不动 log”原则）
+  # 保持原脚本行为：启动时如果日志开启，则自动关掉
   if [[ -f "$CONFIG_PATH" ]]; then
     local log_status
     log_status=$(jq -r '.log.disabled // empty' "$CONFIG_PATH" 2>/dev/null)
     if [[ "$log_status" != "true" && -n "$log_status" ]]; then
       jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+      daemon_reload_safe
       systemctl restart sing-box >/dev/null 2>&1 || true
     fi
   fi
@@ -537,6 +548,7 @@ install_standard() {
   install_singbox_core
   generate_config "direct"
 
+  daemon_reload_safe
   systemctl enable sing-box
   systemctl restart sing-box
   sleep 2
@@ -559,6 +571,7 @@ install_with_warp() {
   install_warp
   generate_config "warp"
 
+  daemon_reload_safe
   systemctl enable sing-box
   systemctl restart sing-box
   sleep 2
@@ -588,9 +601,10 @@ upgrade_to_warp() {
     "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" \
     || error_exit "配置文件升级失败！"
 
-  # 保持原 2.2.5 行为：升级时禁用日志
+  # 保持原行为：升级时禁用日志
   jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
 
+  daemon_reload_safe
   systemctl restart sing-box
   sleep 2
 
@@ -674,7 +688,7 @@ manage_service() {
 
     read -p "请输入选项: " sub_choice
     case $sub_choice in
-      1) systemctl restart sing-box; success_msg "sing-box 服务已重启。"; sleep 1 ;;
+      1) daemon_reload_safe; systemctl restart sing-box; success_msg "sing-box 服务已重启。"; sleep 1 ;;
       2) systemctl stop sing-box; warning_msg "sing-box 服务已停止。"; sleep 1 ;;
       3) systemctl start sing-box; restore_direct_outbound; success_msg "sing-box 服务已启动。"; sleep 1 ;;
       4) systemctl status sing-box; read -n 1 -s -r -p "按任意键返回服务菜单..." ;;
@@ -711,7 +725,7 @@ uninstall_vrvw() {
 
   rm -f /etc/systemd/system/sing-box.service
   [[ -n "$bin_path" ]] && rm -f "$bin_path"
-  systemctl daemon-reload
+  daemon_reload_safe
 
   rm -f "$INSTALL_PATH"
   log_action "已卸载 Sing-Box"
