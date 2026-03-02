@@ -9,7 +9,7 @@
 #    ✅ 本地优先：推荐下载后执行，便于审计与自定义
 #
 # 🚀 推荐用法:
-#    1. 下载：curl -sSL <url> -o DNS-Pure.sh
+#    1. 下载：curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh -o DNS-Pure.sh && chmod +x DNS-Pure.sh && ./DNS-Pure.sh
 #    2. 授权：chmod +x DNS-Pure.sh
 #    3. 执行：sudo ./DNS-Pure.sh
 #    4. 自定义：sudo DNS_SERVERS="1.1.1.1#CF" ./DNS-Pure.sh
