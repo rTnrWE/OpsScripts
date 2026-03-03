@@ -275,10 +275,20 @@ progress_step() {
 }
 
 # =========================
-# Summary report
+# Summary report (UX Optimized)
 # =========================
 print_summary() {
   local script_name="${0##*/}"
+  
+  # 优化：将 Stub 监听器状态转换为更友好的显示
+  local stub_display
+  if [[ "${DNS_STUB_LISTENER}" == "yes" ]]; then
+      stub_display="127.0.0.53"  # 显示具体地址，避免误解
+  elif [[ "${DNS_STUB_LISTENER}" == "no" ]]; then
+      stub_display="已禁用"
+  else
+      stub_display="${DNS_STUB_LISTENER}"
+  fi
 
   cat << EOF
 
@@ -288,7 +298,7 @@ print_summary() {
  ${EMOJI_OK} DNS over TLS: ${DNS_OVER_TLS}
  ${EMOJI_OK} DNSSEC 模式：${DNSSEC_MODE}
  ${EMOJI_OK} 缓存启用：${CACHE_MODE}
- ${EMOJI_OK} Stub 监听器：${DNS_STUB_LISTENER}
+ ${EMOJI_OK} Stub 监听器：${stub_display}
  ${EMOJI_OK} IPv6 支持：$([[ ${HAS_IPV6:-0} -eq 1 ]] && echo "是" || echo "否")
  ${EMOJI_OK} NetworkManager: $([[ ${NETWORKMANAGER_ACTIVE:-0} -eq 1 ]] && echo "已配置托管" || echo "未运行/未干预")
  ${EMOJI_OK} LLMNR/mDNS: ${LLMNR_MODE}/${MDNS_MODE} (已禁用)
@@ -318,7 +328,7 @@ EOF
 AUTO_INSTALL_RESOLVED="${AUTO_INSTALL_RESOLVED:-1}"
 TRIGGER_ROLLBACK="${TRIGGER_ROLLBACK:-0}"
 
-DNS_OVER_TLS="${DNS_OVERTLS:-yes}"
+DNS_OVER_TLS="${DNS_OVER_TLS:-yes}"   # 修复：此处变量名修正为标准格式
 DNSSEC_MODE="${DNSSEC:-yes}"
 CACHE_MODE="${CACHE:-yes}"
 DNS_STUB_LISTENER="${DNS_STUB_LISTENER:-yes}"
@@ -394,7 +404,7 @@ backup_file /etc/resolv.conf
 backup_file /etc/dhcp/dhclient.conf
 backup_file /etc/dhcp/dhclient6.conf
 
-# NetworkManager 适配 (修复：移除 local 关键字)
+# NetworkManager 适配
 if [[ "$NETWORKMANAGER_ACTIVE" -eq 1 ]]; then
   NM_CONF_DIR="/etc/NetworkManager/conf.d"
   NM_CONF_FILE="${NM_CONF_DIR}/10-dns-pure.conf"
@@ -482,7 +492,7 @@ if [[ "${DNS_STUB_LISTENER}" == "yes" ]]; then
   fi
   log_ok "systemd-resolved 已重启"
 
-  # Retry 机制 (修复：移除 local 关键字)
+  # Retry 机制
   WAIT_COUNT=0
   MAX_WAIT=5
   while [[ ! -e "$STUB" ]] && [[ $WAIT_COUNT -lt $MAX_WAIT ]]; do
