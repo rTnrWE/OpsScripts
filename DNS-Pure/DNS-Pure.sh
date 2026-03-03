@@ -88,7 +88,6 @@ detect_environment() {
 backup_file() {
   local f="$1"
   [[ -e "$f" ]] || return 0
-  # 如果已是备份文件，避免重复备份
   [[ "$f" == *.bak.dns-pure-v* ]] && return 0
   
   local bak="${f}.bak.dns-pure-v${VERSION}.$(date +%F-%H%M%S)"
@@ -120,13 +119,10 @@ write_file_atomic() {
 # IPv6 detection (Optimized v2.9.5)
 # =========================
 has_ipv6() {
-  # 1. 检查内核模块
   if [[ -d /proc/sys/net/ipv6 ]]; then
-    # 2. 检查是否被禁用
     if [[ "$(cat /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null)" == "1" ]]; then
       return 1
     fi
-    # 3. 检查是否有全球单播地址或默认路由
     if ip -6 addr show scope global 2>/dev/null | grep -q "inet6"; then return 0; fi
     if ip -6 route show default 2>/dev/null | grep -q .; then return 0; fi
   fi
@@ -167,7 +163,6 @@ ensure_systemd_resolved() {
     return 1
   fi
   
-  # 专注 Ubuntu/Debian，保留 apt-get 逻辑
   if ! cmd_exists apt-get; then
     log_err "❌ 未检测到 apt-get，无法自动安装（非 Debian/Ubuntu 系统？）"
     return 1
@@ -198,13 +193,9 @@ rollback_config() {
   local restored=0
   local script_name="${0##*/}"
   
-  # 定义需要检查的配置文件列表
   local files=("/etc/systemd/resolved.conf" "/etc/resolv.conf" "/etc/dhcp/dhclient.conf" "/etc/dhcp/dhclient6.conf")
-  
-  # 增加 NetworkManager 配置文件回滚
   local nm_conf="/etc/NetworkManager/conf.d/10-dns-pure.conf"
   
-  # 1. 处理常规文件备份恢复
   for f in "${files[@]}"; do
     if [[ ! -e "$f" ]]; then continue; fi
     
@@ -218,11 +209,7 @@ rollback_config() {
     fi
   done
 
-  # 2. 处理 NetworkManager 配置
   if [[ -f "$nm_conf" ]]; then
-    # 检查是否有备份
-    local nm_bak="${nm_conf}.bak.dns-pure-v${VERSION}.$(date +%F-%H%M%S)" # 仅用于查找逻辑
-    # 简单逻辑：如果文件存在，且由本脚本创建（内容包含标识），且无备份，则删除
     if [[ -f "$nm_conf" ]] && grep -q "DNS-Pure" "$nm_conf"; then
        rm -f "$nm_conf"
        log_ok "已清理生成的 NetworkManager 配置：$nm_conf"
@@ -252,7 +239,6 @@ test_dns_functionality() {
   local test_domains=("example.com" "dns.google")
   local failed=0
   
-  # 优先使用系统自带工具，避免依赖外部 nslookup
   local tester=""
   if cmd_exists resolvectl; then
     tester="resolvectl query"
@@ -332,12 +318,12 @@ EOF
 AUTO_INSTALL_RESOLVED="${AUTO_INSTALL_RESOLVED:-1}"
 TRIGGER_ROLLBACK="${TRIGGER_ROLLBACK:-0}"
 
-DNS_OVER_TLS="${DNS_OVER_TLS:-yes}"
-DNSSEC_MODE="${DNSSEC_MODE:-yes}"
-CACHE_MODE="${CACHE_MODE:-yes}"
+DNS_OVER_TLS="${DNS_OVERTLS:-yes}"
+DNSSEC_MODE="${DNSSEC:-yes}"
+CACHE_MODE="${CACHE:-yes}"
 DNS_STUB_LISTENER="${DNS_STUB_LISTENER:-yes}"
-LLMNR_MODE="${LLMNR_MODE:-no}"
-MDNS_MODE="${MDNS_MODE:-no}"
+LLMNR_MODE="${LLMNR:-no}"
+MDNS_MODE="${MDNS:-no}"
 READ_ETC_HOSTS="${READ_ETC_HOSTS:-yes}"
 
 DEFAULT_DNS_V4="1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com 8.8.8.8#dns.google 8.8.4.4#dns.google"
@@ -408,26 +394,23 @@ backup_file /etc/resolv.conf
 backup_file /etc/dhcp/dhclient.conf
 backup_file /etc/dhcp/dhclient6.conf
 
-# 优化：NetworkManager 适配
+# NetworkManager 适配 (修复：移除 local 关键字)
 if [[ "$NETWORKMANAGER_ACTIVE" -eq 1 ]]; then
-  local nm_conf_dir="/etc/NetworkManager/conf.d"
-  local nm_conf_file="${nm_conf_dir}/10-dns-pure.conf"
-  mkdir -p "$nm_conf_dir"
+  NM_CONF_DIR="/etc/NetworkManager/conf.d"
+  NM_CONF_FILE="${NM_CONF_DIR}/10-dns-pure.conf"
+  mkdir -p "$NM_CONF_DIR"
   
-  # 备份已存在的文件
-  if [[ -f "$nm_conf_file" ]]; then
-    backup_file "$nm_conf_file"
+  if [[ -f "$NM_CONF_FILE" ]]; then
+    backup_file "$NM_CONF_FILE"
   fi
   
-  cat > "$nm_conf_file" <<EOF
+  cat > "$NM_CONF_FILE" <<EOF
 # Managed by DNS-Pure v${VERSION}
 [main]
 dns=systemd-resolved
 rc-manager=unmanaged
 EOF
   log_ok "NetworkManager 已配置为 systemd-resolved 模式 (dns=systemd-resolved)"
-  
-  # 通知 NetworkManager 重载配置（不断网）
   soft_run "重载 NetworkManager 配置" nmcli general reload 2>/dev/null || true
 fi
 
@@ -499,13 +482,13 @@ if [[ "${DNS_STUB_LISTENER}" == "yes" ]]; then
   fi
   log_ok "systemd-resolved 已重启"
 
-  # 优化：增加 Retry 机制，解决 Stub 文件生成延迟
-  local wait_count=0
-  local max_wait=5 # 最多等待 5 秒
-  while [[ ! -e "$STUB" ]] && [[ $wait_count -lt $max_wait ]]; do
+  # Retry 机制 (修复：移除 local 关键字)
+  WAIT_COUNT=0
+  MAX_WAIT=5
+  while [[ ! -e "$STUB" ]] && [[ $WAIT_COUNT -lt $MAX_WAIT ]]; do
     sleep 1
-    ((wait_count++))
-    log "等待 resolved 生成 stub 文件... ($wait_count/$max_wait)"
+    ((WAIT_COUNT++))
+    log "等待 resolved 生成 stub 文件... ($WAIT_COUNT/$MAX_WAIT)"
   done
 
   if [[ -e "$STUB" ]]; then
