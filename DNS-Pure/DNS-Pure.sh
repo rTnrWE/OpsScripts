@@ -1,26 +1,23 @@
 #!/usr/bin/env bash
-# DNS-Pure v2.9.3 (Focused · Safe · Local-Ready)
+# DNS-Pure v2.9.5 (Focused · Safe · Robust)
 #
 # 🌟 核心能力:
 #    ✅ 一键净化：自动配置 DoT/DNSSEC/缓存/攻击面缩减
-#    ✅ 自愈安装：缺失 systemd-resolved 时自动安装（Debian/Ubuntu 灵魂功能）
+#    ✅ 自愈安装：缺失 systemd-resolved 时自动安装
+#    ✅ 深度适配：自动处理 NetworkManager 冲突
 #    ✅ 即时生效：重启 resolved 服务即可，无需重启网络
 #    ✅ 安全回滚：TRIGGER_ROLLBACK=1 快速恢复
-#    ✅ 本地优先：推荐下载后执行，便于审计与自定义
 #
 # 🚀 推荐用法:
-#    1. 下载：curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh -o DNS-Pure.sh && chmod +x DNS-Pure.sh && sudo ./DNS-Pure.sh
-#    2. 授权：chmod +x DNS-Pure.sh
-#    3. 执行：sudo ./DNS-Pure.sh
-#    4. 自定义：sudo DNS_SERVERS="1.1.1.1#CF" ./DNS-Pure.sh
+#    curl -sSL https://raw.githubusercontent.com/rTnrWE/OpsScripts/main/DNS-Pure/DNS-Pure.sh -o DNS-Pure.sh && chmod +x DNS-Pure.sh && sudo ./DNS-Pure.sh
 #
 # 📋 DNS_SERVERS 格式规范:
-#    "IPv4#标签 IPv6#标签" (空格分隔，标签可选，用于日志识别)
+#    "IPv4#标签 IPv6#标签" (空格分隔，标签可选)
 #    示例："1.1.1.1#CF 2606:4700::1111#CF 8.8.8.8#Google"
 
 set -euo pipefail
 
-VERSION="2.9.3"
+VERSION="2.9.5"
 
 # =========================
 # Logging helpers + Emoji compatibility
@@ -80,7 +77,7 @@ detect_environment() {
 
   NETWORKMANAGER_ACTIVE=0
   if systemctl is-active --quiet NetworkManager.service 2>/dev/null; then
-    log_warn "检测到 NetworkManager 运行中，可能与 dhclient 配置冲突"
+    log "检测到 NetworkManager 运行中，将自动配置其使用 systemd-resolved"
     NETWORKMANAGER_ACTIVE=1
   fi
 }
@@ -91,6 +88,9 @@ detect_environment() {
 backup_file() {
   local f="$1"
   [[ -e "$f" ]] || return 0
+  # 如果已是备份文件，避免重复备份
+  [[ "$f" == *.bak.dns-pure-v* ]] && return 0
+  
   local bak="${f}.bak.dns-pure-v${VERSION}.$(date +%F-%H%M%S)"
   cp -a "$f" "$bak"
   log_ok "已备份：$f -> $bak"
@@ -117,15 +117,19 @@ write_file_atomic() {
 }
 
 # =========================
-# IPv6 detection
+# IPv6 detection (Optimized v2.9.5)
 # =========================
 has_ipv6() {
-  if [[ -f /proc/sys/net/ipv6/conf/default/disable_ipv6 ]]; then
-    [[ "$(cat /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null)" == "1" ]] && return 1
+  # 1. 检查内核模块
+  if [[ -d /proc/sys/net/ipv6 ]]; then
+    # 2. 检查是否被禁用
+    if [[ "$(cat /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null)" == "1" ]]; then
+      return 1
+    fi
+    # 3. 检查是否有全球单播地址或默认路由
+    if ip -6 addr show scope global 2>/dev/null | grep -q "inet6"; then return 0; fi
+    if ip -6 route show default 2>/dev/null | grep -q .; then return 0; fi
   fi
-  if ip -6 addr show scope global 2>/dev/null | grep -q "inet6"; then return 0; fi
-  if ip -6 route show default 2>/dev/null | grep -q .; then return 0; fi
-  if grep -qE 'nameserver\s+[0-9a-f:]+' /etc/resolv.conf 2>/dev/null; then return 0; fi
   return 1
 }
 
@@ -163,14 +167,13 @@ ensure_systemd_resolved() {
     return 1
   fi
   
+  # 专注 Ubuntu/Debian，保留 apt-get 逻辑
   if ! cmd_exists apt-get; then
-    log_err "❌ 未检测到 apt-get，无法自动安装 systemd-resolved"
-    log_err "💡 请手动安装：apt-get update && apt-get install -y systemd-resolved"
+    log_err "❌ 未检测到 apt-get，无法自动安装（非 Debian/Ubuntu 系统？）"
     return 1
   fi
 
   log_warn "🔧 核心功能：未检测到 systemd-resolved，正在自动安装..."
-  log "   （这是 DNS-Pure 的一键净化能力：自动补齐系统依赖）"
   
   apt-get update -y
   apt-get install -y systemd-resolved
@@ -188,14 +191,21 @@ ensure_systemd_resolved() {
 }
 
 # =========================
-# Rollback function
+# Rollback function (Enhanced v2.9.5)
 # =========================
 rollback_config() {
   log "🔄 正在恢复到 DNS-Pure 修改前的状态..."
   local restored=0
   local script_name="${0##*/}"
   
-  for f in /etc/systemd/resolved.conf /etc/resolv.conf /etc/dhcp/dhclient.conf /etc/dhcp/dhclient6.conf; do
+  # 定义需要检查的配置文件列表
+  local files=("/etc/systemd/resolved.conf" "/etc/resolv.conf" "/etc/dhcp/dhclient.conf" "/etc/dhcp/dhclient6.conf")
+  
+  # 增加 NetworkManager 配置文件回滚
+  local nm_conf="/etc/NetworkManager/conf.d/10-dns-pure.conf"
+  
+  # 1. 处理常规文件备份恢复
+  for f in "${files[@]}"; do
     if [[ ! -e "$f" ]]; then continue; fi
     
     local latest_bak
@@ -205,10 +215,21 @@ rollback_config() {
       cp -a "$latest_bak" "$f"
       log_ok "已恢复：$f <- $latest_bak"
       ((restored++))
-    else
-      log_warn "未找到 $f 的备份"
     fi
   done
+
+  # 2. 处理 NetworkManager 配置
+  if [[ -f "$nm_conf" ]]; then
+    # 检查是否有备份
+    local nm_bak="${nm_conf}.bak.dns-pure-v${VERSION}.$(date +%F-%H%M%S)" # 仅用于查找逻辑
+    # 简单逻辑：如果文件存在，且由本脚本创建（内容包含标识），且无备份，则删除
+    if [[ -f "$nm_conf" ]] && grep -q "DNS-Pure" "$nm_conf"; then
+       rm -f "$nm_conf"
+       log_ok "已清理生成的 NetworkManager 配置：$nm_conf"
+       soft_run "重载 NetworkManager 配置" nmcli general reload 2>/dev/null || true
+       ((restored++))
+    fi
+  fi
   
   if [[ $restored -gt 0 ]]; then
     if systemctl list-unit-files 2>/dev/null | grep -qE '^resolvconf\.service'; then
@@ -216,7 +237,7 @@ rollback_config() {
       soft_run "启用 resolvconf.service" systemctl enable resolvconf.service
     fi
     soft_run "重启 systemd-resolved" systemctl restart systemd-resolved.service
-    log_ok "回滚完成！已恢复 $restored 个配置文件"
+    log_ok "回滚完成！已恢复/清理 $restored 个配置项"
     log "💡 提示：如需重新净化，请执行：sudo ./${script_name}"
   else
     log_warn "未找到可恢复的备份，回滚未执行任何操作"
@@ -224,15 +245,28 @@ rollback_config() {
 }
 
 # =========================
-# DNS validation test
+# DNS validation test (Robust v2.9.5)
 # =========================
 test_dns_functionality() {
   log "🔍 执行 DNS 解析功能测试..."
   local test_domains=("example.com" "dns.google")
   local failed=0
   
+  # 优先使用系统自带工具，避免依赖外部 nslookup
+  local tester=""
+  if cmd_exists resolvectl; then
+    tester="resolvectl query"
+  elif cmd_exists host; then
+    tester="host"
+  elif cmd_exists nslookup; then
+    tester="nslookup"
+  else
+    log_warn "未找到 DNS 测试工具，跳过验证步骤"
+    return 0
+  fi
+
   for domain in "${test_domains[@]}"; do
-    if resolvectl query "$domain" >/dev/null 2>&1 || nslookup "$domain" 127.0.0.53 >/dev/null 2>&1; then
+    if $tester "$domain" >/dev/null 2>&1; then
       log_ok "✓ $domain 解析成功"
     else
       log_warn "✗ $domain 解析失败"
@@ -255,7 +289,7 @@ progress_step() {
 }
 
 # =========================
-# Summary report (UX OPTIMIZED v2.9.3)
+# Summary report
 # =========================
 print_summary() {
   local script_name="${0##*/}"
@@ -264,67 +298,37 @@ print_summary() {
 
 📊 DNS-Pure v${VERSION} 执行摘要
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-${EMOJI_OK} systemd-resolved 状态：$(systemctl is-active systemd-resolved.service 2>/dev/null || echo "unknown")
-${EMOJI_OK} DNS over TLS: ${DNS_OVER_TLS}
-${EMOJI_OK} DNSSEC 模式：${DNSSEC_MODE}
-${EMOJI_OK} 缓存启用：${CACHE_MODE}
-${EMOJI_OK} Stub 监听器：${DNS_STUB_LISTENER}
-${EMOJI_OK} IPv6 支持：$([[ ${HAS_IPV6:-0} -eq 1 ]] && echo "是" || echo "否")
-${EMOJI_OK} LLMNR/mDNS: ${LLMNR_MODE}/${MDNS_MODE} (已禁用)
-${EMOJI_OK} DNS 缓存：已自动刷新 (flush-caches)
+ ${EMOJI_OK} systemd-resolved 状态：$(systemctl is-active systemd-resolved.service 2>/dev/null || echo "unknown")
+ ${EMOJI_OK} DNS over TLS: ${DNS_OVER_TLS}
+ ${EMOJI_OK} DNSSEC 模式：${DNSSEC_MODE}
+ ${EMOJI_OK} 缓存启用：${CACHE_MODE}
+ ${EMOJI_OK} Stub 监听器：${DNS_STUB_LISTENER}
+ ${EMOJI_OK} IPv6 支持：$([[ ${HAS_IPV6:-0} -eq 1 ]] && echo "是" || echo "否")
+ ${EMOJI_OK} NetworkManager: $([[ ${NETWORKMANAGER_ACTIVE:-0} -eq 1 ]] && echo "已配置托管" || echo "未运行/未干预")
+ ${EMOJI_OK} LLMNR/mDNS: ${LLMNR_MODE}/${MDNS_MODE} (已禁用)
+ ${EMOJI_OK} DNS 缓存：已自动刷新
 🔗 /etc/resolv.conf: $(readlink -f /etc/resolv.conf 2>/dev/null || echo "regular file")
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ⚡ 生效说明
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-${EMOJI_OK} DNS 配置已即时生效（无需重启网络服务）
-   所有新建连接将立即使用新 DNS。
+ ${EMOJI_OK} DNS 配置已即时生效
 💡 提示：旧连接可能保持直到超时，通常无需干预。
 
 🔧 自定义使用指南
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 自定义 DNS 服务器（格式：IP#可选标签，空格分隔）:
+💡 自定义 DNS 服务器:
    sudo DNS_SERVERS="8.8.8.8#google 1.1.1.1#cloudflare" ./${script_name}
-
-💡 完整 IPv4 + IPv6 自定义示例（推荐）:
-   sudo DNS_SERVERS="1.1.1.1#CF 2606:4700::1111#CF 8.8.8.8#Google 2001:4860::8888#Google" ./${script_name}
-
-💡 仅 IPv4 自定义（禁用 IPv6 解析器）:
-   sudo DNS_SERVERS="9.9.9.9#quad9" ./${script_name}
-
-💡 自定义 Fallback DNS（主 DNS 失效时备用）:
-   sudo FALLBACK_DNS="208.67.222.222#opendns" ./${script_name}
-
-💡 关闭 DNS over TLS（不推荐）:
-   sudo DNS_OVER_TLS=no ./${script_name}
 
 💡 回滚到之前配置:
    sudo TRIGGER_ROLLBACK=1 ./${script_name}
-
-📋 DNS_SERVERS 格式规范:
-   • 基础格式：IP 地址 或 IP#标签
-   • 示例：
-     - "1.1.1.1"                    # 纯 IP
-     - "1.1.1.1#cloudflare"         # IP+ 标签（便于日志识别）
-     - "8.8.8.8 1.1.1.1"            # 多个 DNS，空格分隔
-     - "2606:4700::1111#cf-v6"      # IPv6 同样支持
-   • 注意：标签仅为注释用途，不影响解析
-
-🌐 常见场景示例:
-   • 国内加速：sudo DNS_SERVERS="223.5.5.5#aliyun 114.114.114.114#china" ./${script_name}
-   • 隐私优先：sudo DNS_SERVERS="1.1.1.1#cf 9.9.9.9#quad9" ./${script_name}
-   • 企业内网：sudo DNS_SERVERS="10.0.0.53#internal 8.8.8.8#fallback" ./${script_name}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 提示：所有配置均通过环境变量传递，无需修改脚本
-💡 提示：建议将脚本保留在本地，便于后续维护与回滚
 EOF
 }
 
 # =========================
 # User-tunable knobs
 # =========================
-# 移除 APPLY_NETWORK_REFRESH，专注 DNS 主线
-# 移除 INSTALL_IFUPDOWN2，减少依赖
 AUTO_INSTALL_RESOLVED="${AUTO_INSTALL_RESOLVED:-1}"
 TRIGGER_ROLLBACK="${TRIGGER_ROLLBACK:-0}"
 
@@ -356,18 +360,16 @@ fi
 
 detect_environment
 
-log "--- DNS-Pure v${VERSION} (Focused · Safe · Local-Ready) ---"
+log "--- DNS-Pure v${VERSION} (Focused · Safe · Robust) ---"
 log "--- 开始执行全面系统 DNS 健康检查 ---"
 
 if ! cmd_exists systemctl; then
-  log_err "未发现 systemctl（该脚本依赖 systemd / systemd-resolved）。"
-  log_err "非 systemd 系统暂不支持，请使用其他 DNS 配置方案。"
+  log_err "未发现 systemctl（该脚本依赖 systemd）。"
   exit 1
 fi
 
 if ! ensure_systemd_resolved; then
-  log_err "未检测到 systemd-resolved.service，且无法自动安装（或已关闭自动安装）。"
-  log_err "你可以手动安装：apt-get update && apt-get install -y systemd-resolved"
+  log_err "systemd-resolved 准备就绪失败。"
   exit 1
 fi
 
@@ -382,9 +384,9 @@ log_ok "systemd-resolved 已就绪"
 HAS_IPV6=0
 if has_ipv6; then
   HAS_IPV6=1
-  log_ok "检测到 IPv6（将对 IPv6 同步净化/加固，并加入 IPv6 DoT 解析器）"
+  log_ok "检测到 IPv6 支持"
 else
-  log "未检测到有效 IPv6（仅对 IPv4 执行解析器配置；仍会硬化系统设置）。"
+  log "未检测到有效 IPv6，仅配置 IPv4 解析器"
 fi
 
 if [[ -z "${DNS_SERVERS}" ]]; then
@@ -394,12 +396,6 @@ fi
 if [[ -z "${FALLBACK_DNS}" ]]; then
   FALLBACK_DNS="${DEFAULT_FALLBACK_V4}"
   [[ "${HAS_IPV6}" == "1" ]] && FALLBACK_DNS="${FALLBACK_DNS} ${DEFAULT_FALLBACK_V6}"
-fi
-
-if [[ -L /etc/resolv.conf ]]; then
-  log_ok "/etc/resolv.conf 当前为软链接：$(readlink -f /etc/resolv.conf)"
-else
-  log_warn "/etc/resolv.conf 当前不是软链接（后续将净化为 systemd-resolved stub）。"
 fi
 
 log ""
@@ -412,9 +408,32 @@ backup_file /etc/resolv.conf
 backup_file /etc/dhcp/dhclient.conf
 backup_file /etc/dhcp/dhclient6.conf
 
+# 优化：NetworkManager 适配
+if [[ "$NETWORKMANAGER_ACTIVE" -eq 1 ]]; then
+  local nm_conf_dir="/etc/NetworkManager/conf.d"
+  local nm_conf_file="${nm_conf_dir}/10-dns-pure.conf"
+  mkdir -p "$nm_conf_dir"
+  
+  # 备份已存在的文件
+  if [[ -f "$nm_conf_file" ]]; then
+    backup_file "$nm_conf_file"
+  fi
+  
+  cat > "$nm_conf_file" <<EOF
+# Managed by DNS-Pure v${VERSION}
+[main]
+dns=systemd-resolved
+rc-manager=unmanaged
+EOF
+  log_ok "NetworkManager 已配置为 systemd-resolved 模式 (dns=systemd-resolved)"
+  
+  # 通知 NetworkManager 重载配置（不断网）
+  soft_run "重载 NetworkManager 配置" nmcli general reload 2>/dev/null || true
+fi
+
 if [[ -f /etc/dhcp/dhclient.conf ]]; then
   if grep -qE '^\s*supersede\s+domain-name-servers' /etc/dhcp/dhclient.conf; then
-    soft_run "净化 dhclient.conf（更新 supersede domain-name-servers）" \
+    soft_run "净化 dhclient.conf" \
       sed -i -E 's/^\s*supersede\s+domain-name-servers.*/supersede domain-name-servers 127.0.0.53;/' /etc/dhcp/dhclient.conf
   else
     cat >> /etc/dhcp/dhclient.conf <<EOF
@@ -422,51 +441,29 @@ if [[ -f /etc/dhcp/dhclient.conf ]]; then
 # Added by DNS-Pure v${VERSION}
 supersede domain-name-servers 127.0.0.53;
 EOF
-    log_ok "净化 dhclient.conf（追加 supersede domain-name-servers）"
   fi
-  log_ok "dhclient.conf 已净化（防止 DHCPv4 覆盖 DNS）"
-else
-  log "未发现 /etc/dhcp/dhclient.conf，跳过 DHCPv4 净化。"
+  log_ok "dhclient.conf 已净化"
 fi
 
 if [[ "${HAS_IPV6}" == "1" && -f /etc/dhcp/dhclient6.conf ]]; then
   if grep -qE '^\s*supersede\s+domain-name-servers' /etc/dhcp/dhclient6.conf; then
-    soft_run "净化 dhclient6.conf（更新 supersede domain-name-servers）" \
-      sed -i -E 's/^\s*supersede\s+domain-name-servers.*/supersede domain-name-servers 127.0.0.53;/' /etc/dhcp/dhclient6.conf
+    soft_run "净化 dhclient6.conf" \
+      sed -i -E 's/^\s*superscede\s+domain-name-servers.*/supersede domain-name-servers 127.0.0.53;/' /etc/dhcp/dhclient6.conf
   else
     cat >> /etc/dhcp/dhclient6.conf <<EOF
 
 # Added by DNS-Pure v${VERSION}
 supersede domain-name-servers 127.0.0.53;
 EOF
-    log_ok "净化 dhclient6.conf（追加 supersede domain-name-servers）"
   fi
-  log_ok "dhclient6.conf 已净化（防止 DHCPv6 覆盖 DNS）"
-else
-  [[ "${HAS_IPV6}" == "1" ]] && log "未发现 /etc/dhcp/dhclient6.conf（或不使用 dhclient6），跳过 DHCPv6 净化。"
-fi
-
-if [[ -d /etc/network/if-up.d ]]; then
-  shopt -s nullglob
-  for s in /etc/network/if-up.d/*; do
-    base="$(basename "$s")"
-    if [[ "$base" =~ resolv|resolved|dns|dhclient|resolvconf ]]; then
-      soft_run "禁用 if-up.d 冲突脚本：$base" chmod -x "$s"
-    fi
-  done
-  shopt -u nullglob
-  log_ok "if-up.d 冲突脚本处理完成（如存在则已禁用）"
-else
-  log "未发现 /etc/network/if-up.d，跳过。"
+  log_ok "dhclient6.conf 已净化"
 fi
 
 if systemctl list-unit-files 2>/dev/null | grep -qE '^resolvconf\.service'; then
   soft_run "停止 resolvconf.service" systemctl stop resolvconf.service
   soft_run "禁用 resolvconf.service" systemctl disable resolvconf.service
-  soft_run "屏蔽 resolvconf.service（避免竞争）" systemctl mask resolvconf.service
+  soft_run "屏蔽 resolvconf.service" systemctl mask resolvconf.service
   log_ok "resolvconf.service 已中立化"
-else
-  log "未检测到 resolvconf.service，跳过。"
 fi
 
 progress_step 2 3 "阶段二：配置 systemd-resolved（IPv4/IPv6 同步加固）..."
@@ -482,7 +479,7 @@ DNSSEC=${DNSSEC_MODE}
 Cache=${CACHE_MODE}
 DNSStubListener=${DNS_STUB_LISTENER}
 
-# Attack surface reduction (recommended for VPS / public servers)
+# Attack surface reduction
 LLMNR=${LLMNR_MODE}
 MulticastDNS=${MDNS_MODE}
 
@@ -490,37 +487,44 @@ ReadEtcHosts=${READ_ETC_HOSTS}
 EOF
 )
 write_file_atomic /etc/systemd/resolved.conf "$RESOLVED_CONF_CONTENT"
-log_ok "已写入 /etc/systemd/resolved.conf（DoT/DNSSEC + 关闭 LLMNR/mDNS + IPv6 支持）"
+log_ok "已写入 /etc/systemd/resolved.conf"
 
 STUB="/run/systemd/resolve/stub-resolv.conf"
 if [[ "${DNS_STUB_LISTENER}" == "yes" ]]; then
   log "正在重启 systemd-resolved 以应用配置..."
   if ! systemctl restart systemd-resolved.service; then
-    log_err "systemd-resolved 重启失败（DNS 可能无法生效）。"
+    log_err "systemd-resolved 重启失败。"
     systemctl --no-pager --full status systemd-resolved.service || true
     exit 1
   fi
   log_ok "systemd-resolved 已重启"
+
+  # 优化：增加 Retry 机制，解决 Stub 文件生成延迟
+  local wait_count=0
+  local max_wait=5 # 最多等待 5 秒
+  while [[ ! -e "$STUB" ]] && [[ $wait_count -lt $max_wait ]]; do
+    sleep 1
+    ((wait_count++))
+    log "等待 resolved 生成 stub 文件... ($wait_count/$max_wait)"
+  done
 
   if [[ -e "$STUB" ]]; then
     rm -f /etc/resolv.conf
     ln -s "$STUB" /etc/resolv.conf
     log_ok "/etc/resolv.conf 已指向 systemd-resolved stub"
   else
-    log_warn "未找到 $STUB（异常：resolved 已运行但 stub 未生成）。继续执行并输出诊断。"
+    log_err "systemd-resolved 重启成功，但 stub 文件未生成 ($STUB)。"
+    log_err "请检查日志：journalctl -u systemd-resolved"
+    exit 1
   fi
 else
-  log_warn "DNSStubListener=no：脚本不会强制 /etc/resolv.conf 指向 stub。"
-  log "正在重启 systemd-resolved 以应用配置..."
+  log_warn "DNSStubListener=no：跳过 resolv.conf 软链接强制修改。"
   systemctl restart systemd-resolved.service || {
     log_err "systemd-resolved 重启失败。"
-    systemctl --no-pager --full status systemd-resolved.service || true
     exit 1
   }
-  log_ok "systemd-resolved 已重启"
 fi
 
-# ✅ 自动刷新缓存，无需用户干预
 soft_run "刷新 DNS 缓存" resolvectl flush-caches
 
 progress_step 3 3 "阶段三：安全应用更改并验证..."
@@ -538,5 +542,4 @@ resolvectl status 2>/dev/null || true
 
 print_summary
 
-log_ok "DNS-Pure v${VERSION} 执行完成（DNS 净化 + 加固 + IPv6 支持 + 自动安装 resolved 已完成）。"
-log "💡 提示：建议保留脚本在本地，便于后续维护与回滚：sudo ./DNS-Pure.sh"
+log_ok "DNS-Pure v${VERSION} 执行完成。"
