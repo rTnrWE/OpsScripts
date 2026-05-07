@@ -4,7 +4,7 @@
 # Thanks: sing-box project(https://github.com/SagerNet/sing-box), fscarmen/warp-sh project(https://github.com/fscarmen/warp-sh)
 #===============================================================================
 
-SCRIPT_VERSION="2.2.6"
+SCRIPT_VERSION="2.2.7"
 INSTALL_PATH="/root/sbvw.sh"
 
 RED='\033[0;31m'
@@ -294,8 +294,6 @@ generate_config() {
           "tag": "vless-in",
           "listen": $listen_addr,
           "listen_port": $listen_port,
-          "sniff": true,
-          "sniff_override_destination": true,
           "tcp_fast_open": true,
           "users": [ { "uuid": $uuid, "flow": "xtls-rprx-vision" } ],
           "tls": {
@@ -310,7 +308,12 @@ generate_config() {
           }
         }
       ],
-      "outbounds": [ $outbound_config ]
+      "outbounds": [ $outbound_config ],
+      "route": {
+        "rules": [
+          { "inbound": "vless-in", "action": "sniff" }
+        ]
+      }
     }' > "$CONFIG_PATH" || error_exit "写入配置失败。"
 
   local info_file_path
@@ -446,8 +449,6 @@ regenerate_config_keep_domain() {
           "tag": "vless-in",
           "listen": $listen_addr,
           "listen_port": $listen_port,
-          "sniff": true,
-          "sniff_override_destination": true,
           "tcp_fast_open": true,
           "users": [ { "uuid": $uuid, "flow": "xtls-rprx-vision" } ],
           "tls": {
@@ -462,7 +463,12 @@ regenerate_config_keep_domain() {
           }
         }
       ],
-      "outbounds": [ $outbound_config ]
+      "outbounds": [ $outbound_config ],
+      "route": {
+        "rules": [
+          { "inbound": "vless-in", "action": "sniff" }
+        ]
+      }
     }' > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" || error_exit "写入新配置失败。"
 
   local server_ip
