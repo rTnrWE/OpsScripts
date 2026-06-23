@@ -4,7 +4,7 @@
 # Thanks: sing-box project(https://github.com/SagerNet/sing-box), fscarmen/warp-sh project(https://github.com/fscarmen/warp-sh)
 #===============================================================================
 
-SCRIPT_VERSION="2.2.7"
+SCRIPT_VERSION="2.2.8"
 INSTALL_PATH="/root/sbvw.sh"
 
 RED='\033[0;31m'
@@ -39,6 +39,60 @@ daemon_reload_safe() {
   systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
+# ==================== 配置校验（重启前保险） ====================
+check_singbox_config() {
+  local config_file="${1:-$CONFIG_PATH}"
+
+  [[ -n "$SINGBOX_BINARY" ]] || SINGBOX_BINARY=$(command -v sing-box || true)
+  [[ -n "$SINGBOX_BINARY" ]] || error_exit "未检测到 sing-box，无法校验配置。"
+  [[ -f "$config_file" ]] || error_exit "配置文件不存在：$config_file"
+
+  if ! "$SINGBOX_BINARY" check -c "$config_file" >/tmp/sbvw-check.log 2>&1; then
+    cat /tmp/sbvw-check.log 2>/dev/null || true
+    error_exit "sing-box 配置校验失败：$config_file"
+  fi
+}
+
+write_checked_config() {
+  local tmp_file="$1"
+  [[ -f "$tmp_file" ]] || error_exit "临时配置文件不存在：$tmp_file"
+
+  check_singbox_config "$tmp_file"
+  [[ -f "$CONFIG_PATH" ]] && cp "$CONFIG_PATH" "$CONFIG_BACKUP_PATH" 2>/dev/null || true
+  mv "$tmp_file" "$CONFIG_PATH" || error_exit "写入配置文件失败。"
+}
+
+# ==================== 域名与地址处理 ====================
+normalize_reality_domain() {
+  local domain="$1"
+  domain="${domain#http://}"
+  domain="${domain#https://}"
+  domain="${domain%%/*}"
+  domain="${domain%%:*}"
+  echo "$domain"
+}
+
+get_public_ip() {
+  local ip
+  ip=$(curl -4 -s --max-time 3 https://api.ipify.org 2>/dev/null || true)
+  if [[ -z "$ip" ]]; then
+    ip=$(curl -6 -s --max-time 3 https://api64.ipify.org 2>/dev/null || true)
+  fi
+  if [[ -z "$ip" ]]; then
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  fi
+  echo "${ip:-unknown}"
+}
+
+format_server_for_uri() {
+  local server="$1"
+  if [[ "$server" == *:* && "$server" != \[*\] ]]; then
+    echo "[$server]"
+  else
+    echo "$server"
+  fi
+}
+
 # ==================== 权限检查 ====================
 check_root() {
   if [[ "$EUID" -ne 0 ]]; then
@@ -47,20 +101,33 @@ check_root() {
 }
 
 # ==================== 依赖检查 ====================
+install_dependency_for_cmd() {
+  local cmd="$1"
+  local apt_pkg yum_pkg dnf_pkg
+
+  case "$cmd" in
+    ping) apt_pkg="iputils-ping"; yum_pkg="iputils"; dnf_pkg="iputils" ;;
+    ss) apt_pkg="iproute2"; yum_pkg="iproute"; dnf_pkg="iproute" ;;
+    *) apt_pkg="$cmd"; yum_pkg="$cmd"; dnf_pkg="$cmd" ;;
+  esac
+
+  if command -v apt-get &> /dev/null; then
+    apt-get update >/dev/null 2>&1
+    apt-get install -y "$apt_pkg" >/dev/null 2>&1
+  elif command -v yum &> /dev/null; then
+    yum install -y "$yum_pkg" >/dev/null 2>&1
+  elif command -v dnf &> /dev/null; then
+    dnf install -y "$dnf_pkg" >/dev/null 2>&1
+  else
+    error_exit "无法确定包管理器。请手动安装 '$cmd'。"
+  fi
+}
+
 check_dependencies() {
   for cmd in curl jq openssl wget ping ss; do
     if ! command -v "$cmd" &> /dev/null; then
       warning_msg "依赖 '$cmd' 未安装，正在尝试自动安装..."
-      if command -v apt-get &> /dev/null; then
-        apt-get update >/dev/null 2>&1
-        apt-get install -y "$cmd" dnsutils iproute2 >/dev/null 2>&1
-      elif command -v yum &> /dev/null; then
-        yum install -y "$cmd" bind-utils iproute >/dev/null 2>&1
-      elif command -v dnf &> /dev/null; then
-        dnf install -y "$cmd" bind-utils iproute >/dev/null 2>&1
-      else
-        error_exit "无法确定包管理器。请手动安装 '$cmd'。"
-      fi
+      install_dependency_for_cmd "$cmd"
       if ! command -v "$cmd" &> /dev/null; then
         error_exit "'$cmd' 自动安装失败。"
       fi
@@ -94,9 +161,9 @@ restore_direct_outbound() {
       warning_msg "WireProxy 已停止或不可用，自动恢复为直连出站"
       cp "$CONFIG_PATH" "${CONFIG_PATH}.warp-backup" 2>/dev/null || true
 
-      jq '.outbounds[0] = { "type": "direct", "tag": "direct", "tcp_fast_open": true }' \
-        "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" \
-        || error_exit "配置更新失败"
+      jq '.outbounds[0] = { "type": "direct", "tag": "direct", "tcp_fast_open": true } | .route.final = "direct"' \
+        "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" || error_exit "配置更新失败"
+      write_checked_config "${CONFIG_PATH}.tmp"
 
       success_msg "配置已恢复为直连出站"
       daemon_reload_safe
@@ -122,9 +189,42 @@ check_tfo_status() {
 # ==================== 安装 Sing-Box 核心 ====================
 install_singbox_core() {
   echo ">>> 正在安装/更新 sing-box 最新稳定版..."
-  if ! bash <(curl -fsSL https://sing-box.app/deb-install.sh); then
+
+  # Debian/Ubuntu 上 sing-box .deb 升级时，dpkg 可能因为 /etc/sing-box/config.json
+  # 被脚本删除/重写而弹出 conffile 交互询问。对一键脚本来说这会卡住流程。
+  # 这里用临时 wrapper 给 dpkg/apt 注入保守选项：默认保留当前配置，后续由本脚本生成/校验正式配置。
+  local installer_wrap_dir=""
+  installer_wrap_dir=$(mktemp -d /tmp/sbvw-install.XXXXXX) || error_exit "创建临时安装目录失败。"
+
+  if command -v dpkg >/dev/null 2>&1; then
+    cat > "${installer_wrap_dir}/dpkg" <<'EOF'
+#!/bin/sh
+exec /usr/bin/dpkg --force-confdef --force-confold "$@"
+EOF
+    chmod +x "${installer_wrap_dir}/dpkg"
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    cat > "${installer_wrap_dir}/apt-get" <<'EOF'
+#!/bin/sh
+exec /usr/bin/apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+EOF
+    chmod +x "${installer_wrap_dir}/apt-get"
+  fi
+
+  if command -v apt >/dev/null 2>&1; then
+    cat > "${installer_wrap_dir}/apt" <<'EOF'
+#!/bin/sh
+exec /usr/bin/apt -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+EOF
+    chmod +x "${installer_wrap_dir}/apt"
+  fi
+
+  if ! DEBIAN_FRONTEND=noninteractive PATH="${installer_wrap_dir}:$PATH" bash <(curl -fsSL https://sing-box.app/deb-install.sh); then
+    rm -rf "$installer_wrap_dir" 2>/dev/null || true
     error_exit "sing-box 核心安装失败。"
   fi
+  rm -rf "$installer_wrap_dir" 2>/dev/null || true
 
   SINGBOX_BINARY=$(command -v sing-box)
   [[ -n "$SINGBOX_BINARY" ]] || error_exit "未能找到 sing-box 可执行文件。"
@@ -191,10 +291,12 @@ show_summary() {
 
   local outbound_info="direct"
   if [[ "${OUTBOUND_TYPE:-}" == "warp" ]]; then
-    outbound_info="warp (wireproxy socks5 127.0.0.1:40043)"
+    outbound_info="warp (wireproxy socks5 127.0.0.1:40043, tcp only)"
   fi
 
-  local vless_uri="vless://${UUID}@${SERVER_IP}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&reality=1&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&sni=${HANDSHAKE_SERVER}#Reality"
+  local uri_server
+  uri_server=$(format_server_for_uri "${SERVER_IP}")
+  local vless_uri="vless://${UUID}@${uri_server}:${LISTEN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${HANDSHAKE_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp#Reality"
 
   clear
   echo "====================================================="
@@ -202,22 +304,33 @@ show_summary() {
   echo "====================================================="
   echo "服务端配置文件：${CONFIG_PATH}"
   echo "信息文件：${info_file}"
+  echo "出站模式：${outbound_info}"
   echo "-------------------------------------------------"
-  echo -e "${GREEN}VLESS 导入链接${NC}"
+  echo -e "${GREEN}1) VLESS 导入链接${NC}"
   echo "${vless_uri}"
   echo "-------------------------------------------------"
-  echo "server      : ${SERVER_IP}"
-  echo "port        : ${LISTEN_PORT}"
-  echo "uuid        : ${UUID}"
-  echo "flow        : xtls-rprx-vision"
-  echo "servername  : ${HANDSHAKE_SERVER}"
-  echo "public-key  : ${PUBLIC_KEY}"
-  echo "short-id    : ${SHORT_ID}"
+  echo -e "${GREEN}2) mihomo / Stash YAML 节点配置${NC}"
+  cat <<EOF
+proxies:
+- name: "Reality"
+  type: vless
+  server: "${SERVER_IP}"
+  port: ${LISTEN_PORT}
+  uuid: ${UUID}
+  udp: true
+  flow: xtls-rprx-vision
+  packet-encoding: xudp
+  tls: true
+  servername: ${HANDSHAKE_SERVER}
+  client-fingerprint: chrome
+  reality-opts:
+    public-key: ${PUBLIC_KEY}
+    short-id: ${SHORT_ID}
+  network: tcp
+EOF
   echo "-------------------------------------------------"
-  echo -e "${GREEN}出站#Outbounds${NC}: ${outbound_info}"
-  echo "-------------------------------------------------"
-  echo "建议测试：ping ${HANDSHAKE_SERVER}"
-  echo "-------------------------------------------------"
+  echo "Reality 域名延迟测试：ping ${HANDSHAKE_SERVER}"
+  echo "====================================================="
 }
 
 # ==================== 生成配置文件 ====================
@@ -234,6 +347,7 @@ generate_config() {
     warning_msg "检测到 443 端口已被占用，将切换到'网站共存'模式。"
     read -p "请输入 sing-box 用于内部监听的端口 [默认 10443]: " custom_port
     listen_port=${custom_port:-10443}
+    warning_msg "共存模式只让 sing-box 监听 127.0.0.1:${listen_port}；你还需要手动配置 Nginx/HAProxy/Caddy 的 TCP SNI 分流，否则外部客户端无法连接。"
   fi
 
   local handshake_server
@@ -241,6 +355,8 @@ generate_config() {
     echo -en "${GREEN}请输入 Reality 域名（示例：www.bing.com）: ${NC}"
     read -r handshake_server
     handshake_server=${handshake_server:-www.bing.com}
+    handshake_server=$(normalize_reality_domain "$handshake_server")
+    [[ -n "$handshake_server" ]] || { warning_msg "Reality 域名不能为空。"; continue; }
 
     if check_reality_domain "$handshake_server"; then
       success_msg "最终检测：$handshake_server 适合 Reality SNI，继续安装。"
@@ -268,11 +384,13 @@ generate_config() {
 
   mkdir -p /etc/sing-box
 
-  local outbound_config
+  local outbound_config outbound_tag
   if [[ "$outbound_type" == "warp" ]]; then
-    outbound_config='{ "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "tcp_fast_open": true, "username": "", "password": "" }'
+    outbound_tag="warp-out"
+    outbound_config='{ "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "network": "tcp", "tcp_fast_open": true }'
     LAST_OUTBOUND_TYPE="warp"
   else
+    outbound_tag="direct"
     outbound_config='{ "type": "direct", "tag": "direct", "tcp_fast_open": true }'
     LAST_OUTBOUND_TYPE="direct"
   fi
@@ -286,6 +404,7 @@ generate_config() {
     --arg private_key "$private_key" \
     --arg short_id "$short_id" \
     --argjson outbound_config "$outbound_config" \
+    --arg outbound_tag "$outbound_tag" \
     '{
       "log": { "disabled": true },
       "inbounds": [
@@ -312,9 +431,12 @@ generate_config() {
       "route": {
         "rules": [
           { "inbound": "vless-in", "action": "sniff" }
-        ]
+        ],
+        "final": $outbound_tag
       }
-    }' > "$CONFIG_PATH" || error_exit "写入配置失败。"
+    }' > "${CONFIG_PATH}.tmp" || error_exit "写入配置失败。"
+
+  write_checked_config "${CONFIG_PATH}.tmp"
 
   local info_file_path
   if [[ "$outbound_type" == "warp" ]]; then
@@ -324,7 +446,7 @@ generate_config() {
   fi
 
   local server_ip
-  server_ip=$(curl -s --max-time 3 https://api.ipify.org 2>/dev/null || echo "unknown")
+  server_ip=$(get_public_ip)
 
   cat > "$info_file_path" <<EOF
 # Generated by sbvw.sh
@@ -346,6 +468,7 @@ change_reality_domain() {
   [[ -f "$CONFIG_PATH" ]] || error_exit "配置文件不存在。"
 
   read -p "请输入新的 Reality 域名: " new_domain
+  new_domain=$(normalize_reality_domain "$new_domain")
   [[ -n "$new_domain" ]] || error_exit "域名不能为空。"
 
   if ! check_reality_domain "$new_domain"; then
@@ -355,8 +478,8 @@ change_reality_domain() {
   jq --arg new_domain "$new_domain" \
     '.inbounds[0].tls.reality.handshake.server = $new_domain
      | .inbounds[0].tls.server_name = $new_domain' \
-    "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" \
-    || error_exit "配置更新失败！"
+    "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" || error_exit "配置更新失败！"
+  write_checked_config "${CONFIG_PATH}.tmp"
 
   local info_file=""
   if [[ -f "$INFO_PATH_VRV" ]]; then info_file="$INFO_PATH_VRV"; fi
@@ -408,6 +531,13 @@ regenerate_config_keep_domain() {
     info_file_path="$INFO_PATH_VRV"
   fi
   [[ -n "$outbound_obj" && "$outbound_obj" != "null" ]] || error_exit "无法读取现有 outbounds[0]。"
+  local outbound_tag
+  if [[ "$out0_type" == "socks" ]]; then
+    outbound_tag="warp-out"
+    outbound_obj=$(echo "$outbound_obj" | jq '.network = "tcp" | del(.username) | del(.password)')
+  else
+    outbound_tag="direct"
+  fi
 
   echo "====================================================="
   echo " 重新生成新配置（Reality 域名不变）"
@@ -441,6 +571,7 @@ regenerate_config_keep_domain() {
     --arg private_key "$private_key" \
     --arg short_id "$short_id" \
     --argjson outbound_config "$outbound_obj" \
+    --arg outbound_tag "$outbound_tag" \
     '{
       "log": $old_log,
       "inbounds": [
@@ -467,12 +598,15 @@ regenerate_config_keep_domain() {
       "route": {
         "rules": [
           { "inbound": "vless-in", "action": "sniff" }
-        ]
+        ],
+        "final": $outbound_tag
       }
-    }' > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" || error_exit "写入新配置失败。"
+    }' > "${CONFIG_PATH}.tmp" || error_exit "写入新配置失败。"
+
+  write_checked_config "${CONFIG_PATH}.tmp"
 
   local server_ip
-  server_ip=$(curl -s --max-time 3 https://api.ipify.org 2>/dev/null || echo "unknown")
+  server_ip=$(get_public_ip)
 
   cat > "$info_file_path" <<EOF
 # Generated by sbvw.sh (regenerate)
@@ -513,8 +647,8 @@ check_and_toggle_log_status() {
   fi
 
   jq ".log.disabled = $new_status" "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" \
-    && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" \
     || error_exit "更新日志配置失败"
+  write_checked_config "${CONFIG_PATH}.tmp"
 
   daemon_reload_safe
   systemctl restart sing-box
@@ -536,7 +670,17 @@ auto_disable_log_on_start() {
     local log_status
     log_status=$(jq -r '.log.disabled // empty' "$CONFIG_PATH" 2>/dev/null)
     if [[ "$log_status" != "true" && -n "$log_status" ]]; then
-      jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+      jq '.log.disabled = true' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" || return 0
+      if command -v sing-box >/dev/null 2>&1; then
+        SINGBOX_BINARY=$(command -v sing-box)
+        if ! "$SINGBOX_BINARY" check -c "${CONFIG_PATH}.tmp" >/tmp/sbvw-check.log 2>&1; then
+          warning_msg "自动关闭日志时发现配置校验失败，已跳过自动修改。"
+          rm -f "${CONFIG_PATH}.tmp"
+          return 0
+        fi
+      fi
+      [[ -f "$CONFIG_PATH" ]] && cp "$CONFIG_PATH" "$CONFIG_BACKUP_PATH" 2>/dev/null || true
+      mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
       daemon_reload_safe
       systemctl restart sing-box >/dev/null 2>&1 || true
     fi
@@ -601,14 +745,10 @@ upgrade_to_warp() {
 
   echo "正在升级配置文件..."
   local warp_outbound
-  warp_outbound='{ "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "tcp_fast_open": true, "username": "", "password": "" }'
+  warp_outbound='{ "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40043, "version": "5", "network": "tcp", "tcp_fast_open": true }'
 
-  jq --argjson new_outbound "$warp_outbound" '.outbounds = [$new_outbound]' \
-    "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH" \
-    || error_exit "配置文件升级失败！"
-
-  # 保持原行为：升级时禁用日志
-  jq '.log = {"disabled": true}' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+  jq --argjson new_outbound "$warp_outbound"     '.outbounds = [$new_outbound] | .route.final = "warp-out" | .log = {"disabled": true}'     "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" || error_exit "配置文件升级失败！"
+  write_checked_config "${CONFIG_PATH}.tmp"
 
   daemon_reload_safe
   systemctl restart sing-box
